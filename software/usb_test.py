@@ -141,12 +141,18 @@ def do_dump(dev, save_csv=None):
 
     # 本体を「固定長」で読む(行ではなくバイト数で)
     raw = bytearray()
+    idle = 0
     while len(raw) < nbytes:
         chunk = dev.ser.read(nbytes - len(raw))
-        if not chunk:
-            print(f"  ⚠ タイムアウト: {len(raw)}/{nbytes} バイトのみ受信")
-            break
-        raw += chunk
+        if chunk:
+            raw += chunk
+            idle = 0
+        else:
+            # データが来ている間は待ち続け、約6秒(2s×3)無受信で打ち切る
+            idle += 1
+            if idle >= 3:
+                print(f"  ⚠ タイムアウト: {len(raw)}/{nbytes} バイトのみ受信")
+                break
 
     # フッタ(JSON行)を読む
     footer = dev.ser.readline().decode("ascii", errors="replace").strip()
@@ -154,16 +160,25 @@ def do_dump(dev, save_csv=None):
         print("  ⚠ フッタ未検出:", footer)
 
     # 復元 (little-endian: int16 temp, uint16 hum, uint16 co2)
+    # co2 == 0xFFFF(=CO2_INVALID) は欠測(計測失敗)レコード。
+    CO2_INVALID = 0xFFFF
     n = len(raw) // rec_size
     rows = []
+    n_invalid = 0
     for i in range(n):
         temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
         ts = start_dt + i * interval
-        rows.append((i, ts, temp / 100.0, hum / 100.0, co2))
+        if co2 == CO2_INVALID:
+            n_invalid += 1
+            rows.append((i, ts, None, None, None))  # 欠測
+        else:
+            rows.append((i, ts, temp / 100.0, hum / 100.0, co2))
 
     def fmt(r):
         i, ts, t, h, c = r
         tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")  # ローカル時刻
+        if t is None:
+            return f"  [{i}] {tstr}  (欠測 / invalid)"
         return f"  [{i}] {tstr}  temp={t:.2f}C hum={h:.2f}% co2={c}ppm"
 
     for r in rows[:5]:
@@ -172,7 +187,7 @@ def do_dump(dev, save_csv=None):
         print(f"  ... ({len(rows) - 10} 件省略) ...")
         for r in rows[-5:]:
             print(fmt(r))
-    print(f"{n} レコード受信")
+    print(f"{n} レコード受信 (うち欠測 {n_invalid} 件)")
 
     if save_csv:
         with open(save_csv, "w", newline="") as f:
@@ -180,7 +195,159 @@ def do_dump(dev, save_csv=None):
             w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"])
             for i, ts, t, h, c in rows:
                 tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                w.writerow([i, ts, tstr, f"{t:.2f}", f"{h:.2f}", c])
+                if t is None:
+                    w.writerow([i, ts, tstr, "", "", ""])  # 欠測は空欄
+                else:
+                    w.writerow([i, ts, tstr, f"{t:.2f}", f"{h:.2f}", c])
+        print(f"CSV保存: {save_csv}")
+
+
+def _read_range(dev, start, count, read_timeout=2.0, idle_limit=3):
+    """dump_range を1回要求し、(header_dict, raw_bytes) を返す。失敗時 (None, b'')。
+
+    header は {"dump":"begin","start":S,"count":C,"total":T,"rec_size":..,...}。
+    本体は count*rec_size バイトを固定長で読み、最後にフッタ(JSON行)を読み捨てる。
+    """
+    dev._id += 1
+    req = {"id": dev._id, "command": "dump_range",
+           "params": {"start": int(start), "count": int(count)}}
+    dev.ser.write((json.dumps(req) + "\n").encode("ascii"))
+
+    # ヘッダ(JSON行)
+    hdr = None
+    for _ in range(5):
+        line = dev.ser.readline().decode("ascii", errors="replace").strip()
+        if line.startswith("{"):
+            try:
+                hdr = json.loads(line)
+            except json.JSONDecodeError:
+                hdr = None
+            break
+        if line == "":
+            break
+    if not hdr or hdr.get("dump") != "begin":
+        print("  dump_range ヘッダ取得失敗:", hdr)
+        return None, b""
+
+    c        = hdr.get("count", 0)
+    rec_size = hdr.get("rec_size", 6)
+    nbytes   = c * rec_size
+
+    raw = bytearray()
+    idle = 0
+    while len(raw) < nbytes:
+        chunk = dev.ser.read(nbytes - len(raw))
+        if chunk:
+            raw += chunk
+            idle = 0
+        else:
+            idle += 1
+            if idle >= idle_limit:
+                break
+
+    # フッタ(JSON行)を読み捨て
+    dev.ser.readline()
+    return hdr, bytes(raw)
+
+
+def _decode_rows(raw, rec_size, start_dt, interval, base_index=0):
+    CO2_INVALID = 0xFFFF
+    n = len(raw) // rec_size
+    rows = []
+    n_invalid = 0
+    for i in range(n):
+        temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
+        idx = base_index + i
+        ts = start_dt + idx * interval
+        if co2 == CO2_INVALID:
+            n_invalid += 1
+            rows.append((idx, ts, None, None, None))
+        else:
+            rows.append((idx, ts, temp / 100.0, hum / 100.0, co2))
+    return rows, n_invalid
+
+
+def _fmt_row(r):
+    i, ts, t, h, c = r
+    tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    if t is None:
+        return f"  [{i}] {tstr}  (欠測 / invalid)"
+    return f"  [{i}] {tstr}  temp={t:.2f}C hum={h:.2f}% co2={c}ppm"
+
+
+def do_peek(dev, start, count):
+    """任意範囲を1回だけ読む。停止点より後(例: peek 400 16)が読めるかの確認用。"""
+    hdr, raw = _read_range(dev, start, count)
+    if hdr is None:
+        return
+    rec_size = hdr.get("rec_size", 6)
+    got = len(raw) // rec_size
+    print(f"  peek start={hdr.get('start')} count(要求clamp後)={hdr.get('count')} "
+          f"total={hdr.get('total')}  → {got} レコード受信 ({len(raw)} バイト)")
+    rows, _ = _decode_rows(raw, rec_size, hdr.get("start_dt", 0),
+                           hdr.get("interval", 0), base_index=hdr.get("start", start))
+    for r in rows:
+        print(_fmt_row(r))
+
+
+def do_dump_chunked(dev, save_csv=None, chunk=64, pause_ms=300):
+    """0から chunk 件ずつ dump_range で取得し、毎回 pause_ms ウェイトを入れて全件取得を試みる。
+
+    分割＋ウェイトで全件取れれば「連続転送/電源(回復時間が必要)」が原因。
+    途中で必ず同じ絶対indexで止まるなら「フラッシュ/データ」が原因と切り分けられる。
+    """
+    # まず total と書式を1件取得で把握
+    hdr0, _ = _read_range(dev, 0, 1)
+    if hdr0 is None:
+        print("  状態取得失敗")
+        return
+    total    = hdr0.get("total", 0)
+    rec_size = hdr0.get("rec_size", 6)
+    start_dt = hdr0.get("start_dt", 0)
+    interval = hdr0.get("interval", 0)
+    print(f"dumpc: total={total}, rec_size={rec_size}, chunk={chunk}, "
+          f"pause={pause_ms}ms, start_dt={start_dt}, interval={interval}")
+
+    raw_all = bytearray()
+    idx = 0
+    fail = 0
+    while idx < total:
+        want = min(chunk, total - idx)
+        hdr, raw = _read_range(dev, idx, want)
+        got = len(raw) // rec_size if hdr else 0
+        bar = f"  [{idx:5d}/{total}] 要求{want} → 受信{got}"
+        if got < want:
+            bar += "  ⚠ 不足"
+            fail += 1
+        print(bar, flush=True)
+        if got == 0:
+            print("  → 0件。これ以上進めないので中断。")
+            break
+        raw_all += raw[:got * rec_size]
+        idx += got
+        if idx < total:
+            time.sleep(pause_ms / 1000.0)
+
+    rows, n_invalid = _decode_rows(raw_all, rec_size, start_dt, interval)
+    print(f"合計 {len(rows)}/{total} レコード受信 (うち欠測 {n_invalid} 件, "
+          f"不足チャンク {fail} 回)")
+    for r in rows[:5]:
+        print(_fmt_row(r))
+    if len(rows) > 10:
+        print(f"  ... ({len(rows) - 10} 件省略) ...")
+        for r in rows[-5:]:
+            print(_fmt_row(r))
+
+    if save_csv:
+        with open(save_csv, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"])
+            for i, ts, t, h, c in rows:
+                tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                if t is None:
+                    w.writerow([i, ts, tstr, "", "", ""])
+                else:
+                    w.writerow([i, ts, tstr, f"{t:.2f}", f"{h:.2f}", c])
         print(f"CSV保存: {save_csv}")
 
 
@@ -231,6 +398,8 @@ def main():
     print("  set_time 1750000000   指定epochを設定")
     print("  dump              保存データをバイナリ取得して表示")
     print("  dump out.csv      取得してCSV保存")
+    print("  dumpc [file] [chunk] [pause_ms]  分割取得(切り分け用,既定 chunk=64 pause=300ms)")
+    print("  peek <start> <count>             任意範囲を直接読む  例: peek 400 16")
     print("  start_logging     計測開始(応答後USB切断。リセットで通信モードに戻る)")
     while True:
         try:
@@ -249,6 +418,30 @@ def main():
             continue
         if command == "dump":
             do_dump(dev, parts[1] if len(parts) > 1 else None)
+            continue
+        if command == "dumpc":
+            # dumpc [file] [chunk] [pause_ms]  分割取得(切り分け用)
+            csvf = None
+            chunk = 64
+            pause = 300
+            rest = parts[1:]
+            # 先頭が数字でなければファイル名扱い
+            if rest and not rest[0].isdigit():
+                csvf = rest.pop(0)
+            if rest:
+                try: chunk = int(rest[0])
+                except ValueError: pass
+            if len(rest) > 1:
+                try: pause = int(rest[1])
+                except ValueError: pass
+            do_dump_chunked(dev, csvf, chunk=chunk, pause_ms=pause)
+            continue
+        if command == "peek":
+            # peek <start> <count>  任意範囲を直接読む(停止点より後が読めるか確認)
+            if len(parts) < 3 or not parts[1].isdigit() or not parts[2].isdigit():
+                print("  使い方: peek <start> <count>   例: peek 400 16")
+                continue
+            do_peek(dev, int(parts[1]), int(parts[2]))
             continue
         params = None
         try:

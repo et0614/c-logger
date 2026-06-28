@@ -42,6 +42,10 @@ uint16_t USB_Comm_SendBytes(const uint8_t *data, uint16_t len);
 /// 送信バッファをホストへ確実に押し出す (応答送出後にSTANDBYへ移行する前に呼ぶ)。
 void USB_Comm_Flush(void);
 
+/// USBスタック全体(USBDevice_Handle + CDCハンドラ)を1回駆動する。
+/// dump等の長時間バルク送信中に定期的に呼び、デバイスを無応答化させない(ホスト側パイプ停止防止)。
+void USB_Comm_Pump(void);
+
 #ifdef __cplusplus
 }
 #endif

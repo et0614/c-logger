@@ -30,6 +30,11 @@ static inline void turnOffGreenLED(void)
     LED_SetLow();
 }
 
+static inline void turnToggleGreenLED(void)
+{
+    LED_Toggle();
+}
+
 static inline void blinkGreenLED(int iterNum)
 {
 	if(iterNum < 1) return;

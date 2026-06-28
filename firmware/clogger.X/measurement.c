@@ -9,11 +9,16 @@
 // 次に書き込むレコード index (= 有効レコード数)
 uint32_t rec_latest = 0;
 
+// single-shot をトリガ済みか (= 読み出し待ち)
+static bool s_pending = false;
+
 void Measurement_Initialize(void)
 {
     // STCC4 ソフトリセット (general call) で既知の状態にする
     STCC4_initialize();
     DELAY_milliseconds(10);
+
+    s_pending = false; // 読み出し待ちをクリア (セッション開始時の整合)
 
     // Flash に保存済みのレコード数を復元 → 次の書き込み位置
     rec_latest = W25_Count_Record();
@@ -57,9 +62,6 @@ bool Measurement_Record(void)
 
 // ====== 非ブロッキング計測 ======
 
-// single-shot をトリガ済みか (= 読み出し待ち)
-static bool s_pending = false;
-
 bool Measurement_Trigger(void)
 {
     if (!STCC4_measureSingleShot()) return false; // I2Cコマンドのみ。即return
@@ -95,14 +97,22 @@ bool Measurement_ReadStore(void)
 
     if (rec_latest >= MAX_RECORD_COUNT) return false; // 満杯停止
 
+    SensorData_t rec;
     uint16_t co2;
     float    temp_c, humi_pct;
-    if (!STCC4_readMeasurement(&co2, &temp_c, &humi_pct)) return false;
-
-    SensorData_t rec;
-    rec.temperature = (int16_t)(temp_c * 100.0f + (temp_c >= 0.0f ? 0.5f : -0.5f));
-    rec.humidity    = (uint16_t)(humi_pct * 100.0f + 0.5f);
-    rec.co2_ppm     = co2;
+    if (STCC4_readMeasurement(&co2, &temp_c, &humi_pct))
+    {
+        rec.temperature = (int16_t)(temp_c * 100.0f + (temp_c >= 0.0f ? 0.5f : -0.5f));
+        rec.humidity    = (uint16_t)(humi_pct * 100.0f + 0.5f);
+        rec.co2_ppm     = co2;
+    }
+    else
+    {
+        // 計測失敗: 欠測レコードを書いて index を進める(時刻とindexの対応を保つ)。
+        rec.temperature = 0;
+        rec.humidity    = 0;          // 0xFFFF(空き)以外 → 件数にカウントされる
+        rec.co2_ppm     = CO2_INVALID; // 欠測マーカー
+    }
 
     if (!W25_WriteRecord(rec_latest, &rec)) return false;
     rec_latest++;

@@ -236,6 +236,30 @@ static void ph_get_status(int32_t id, const char *json,
     send_line(b);
 }
 
+// 1回の送出にまとめるレコード数 (6B*40=240B。CDC送信バッファ512B以内)。
+// 1レコードずつ送ると転送回数が増えて遅いので、まとめて USB_Comm_SendBytes に渡す。
+#define DUMP_BATCH_RECS  40
+
+// レコード [start, start+count) を生バイナリでバッチ送出する (dump / dump_range 共通)。
+static void dump_records_binary(uint32_t start, uint32_t count)
+{
+    uint8_t buf[DUMP_BATCH_RECS * sizeof(SensorData_t)];
+    uint16_t fill = 0;
+    for (uint32_t i = 0; i < count; i++)
+    {
+        SensorData_t rec;
+        if (!W25_ReadRecord(start + i, &rec)) break; // 読み出し失敗で打ち切り
+        memcpy(&buf[fill], &rec, sizeof(rec));
+        fill += sizeof(rec);
+        if (fill >= sizeof(buf))
+        {
+            USB_Comm_SendBytes(buf, fill);
+            fill = 0;
+        }
+    }
+    if (fill > 0) USB_Comm_SendBytes(buf, fill); // 端数を送出
+}
+
 // データ読み出し (dump): フレーミングはJSON行、レコード本体は生バイナリで送る。
 //   ヘッダ(JSON行): {"id":N,"ok":true,"dump":"begin","count":M,"rec_size":6,"start_dt":S,"interval":IV}
 //   本体          : M個の SensorData_t を連続したバイナリで送出 (little-endian:
@@ -259,17 +283,64 @@ static void ph_dump(int32_t id, const char *json,
         (unsigned long)EM_mSettings.start_dt, (unsigned)EM_mSettings.interval_co2);
     send_line(b);
 
-    // レコード本体 (生バイナリ)
-    for (uint32_t i = 0; i < count; i++)
-    {
-        SensorData_t rec;
-        if (!W25_ReadRecord(i, &rec)) break; // 読み出し失敗で打ち切り
-        USB_Comm_SendBytes((const uint8_t *)&rec, sizeof(rec));
-    }
+    // レコード本体 (生バイナリ, まとめ送り)
+    dump_records_binary(0, count);
 
     // フッタ (JSON 1行)
     snprintf(b, sizeof(b), "{\"id\":%ld,\"dump\":\"end\"}\n", (long)id);
     send_line(b);
+    USB_Comm_Flush(); // フッタを確実に押し出す
+}
+
+// 範囲指定データ読み出し (dump_range): dump を「部分範囲」に限定したもの。
+//   params: { "start": 先頭レコードindex, "count": 読み出す件数 }
+// 用途: dump が途中で止まる問題の切り分け。PC側から小さなチャンク(例:64件)を
+//       インターバルを空けて複数回要求することで、(a)分割すれば全件取れるか
+//       (=連続転送/電源が原因) (b)特定の絶対indexで必ず止まるか(=フラッシュ/データが原因)
+//       (c)停止点より後(例 start=400)を直接読めるか、を判定する。
+//   ヘッダ(JSON行): {"id":N,"ok":true,"dump":"begin","start":S,"count":C,"total":T,
+//                    "rec_size":6,"start_dt":..,"interval":..}
+//     start=実際に読み出す先頭index, count=このレスポンスで送る件数(範囲クランプ後),
+//     total=フラッシュ上の有効レコード総数。
+//   本体          : C 個の SensorData_t を生バイナリで送出。
+//   フッタ(JSON行): {"id":N,"dump":"end"}
+static void ph_dump_range(int32_t id, const char *json,
+                          const jsmntok_t *t, int ntok, int params)
+{
+    int32_t start = 0, want = 0;
+    if (params >= 0)
+    {
+        int st = obj_get(json, t, ntok, params, "start");
+        int ct = obj_get(json, t, ntok, params, "count");
+        if (st >= 0) start = tok_int(json, &t[st]);
+        if (ct >= 0) want  = tok_int(json, &t[ct]);
+    }
+    if (start < 0) start = 0;
+    if (want  < 0) want  = 0;
+
+    uint32_t total = W25_Count_Record();
+
+    // 範囲を [0, total] にクランプ
+    uint32_t s = (uint32_t)start;
+    uint32_t c;
+    if (s >= total)            c = 0;            // 範囲外: 0件
+    else if ((uint32_t)want > (total - s)) c = total - s;
+    else                       c = (uint32_t)want;
+
+    char b[160];
+    snprintf(b, sizeof(b),
+        "{\"id\":%ld,\"ok\":true,\"dump\":\"begin\",\"start\":%lu,\"count\":%lu,"
+        "\"total\":%lu,\"rec_size\":%u,\"start_dt\":%lu,\"interval\":%u}\n",
+        (long)id, (unsigned long)s, (unsigned long)c, (unsigned long)total,
+        (unsigned)sizeof(SensorData_t),
+        (unsigned long)EM_mSettings.start_dt, (unsigned)EM_mSettings.interval_co2);
+    send_line(b);
+
+    dump_records_binary(s, c); // まとめ送り
+
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"dump\":\"end\"}\n", (long)id);
+    send_line(b);
+    USB_Comm_Flush();
 }
 
 // コマンドテーブル (NULL 終端)
@@ -290,6 +361,7 @@ static const jp_command_t s_commands[] = {
     { "clear_memory",  ph_clear_memory  },
     { "get_status",    ph_get_status    },
     { "dump",          ph_dump          },
+    { "dump_range",    ph_dump_range    },
     { NULL,            NULL             }
 };
 

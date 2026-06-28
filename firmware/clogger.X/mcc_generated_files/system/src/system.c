@@ -42,7 +42,6 @@ void SYSTEM_Initialize(void)
     ADC0_Initialize();
     I2C0_Host_Initialize();
     SPI0_Initialize();
-    TCA0_Initialize();
     USB0_Initialize();
     NVM_Initialize();
     RTC_Initialize();

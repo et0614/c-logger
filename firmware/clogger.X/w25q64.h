@@ -48,8 +48,14 @@ extern "C" {
 typedef struct __attribute__((packed)) {
     int16_t  temperature;   // 温度     (単位: ℃ * 100)
     uint16_t humidity;      // 相対湿度 (単位: % * 100)  ※空き判定に使用 (0xFFFF=空き)
-    uint16_t co2_ppm;       // CO2濃度  (単位: ppm)
+    uint16_t co2_ppm;       // CO2濃度  (単位: ppm)。CO2_INVALID なら欠測(計測失敗)レコード
 } SensorData_t;
+
+// 欠測(計測失敗)マーカー: co2_ppm がこの値のレコードは無効。実在しないppm値を使う。
+// 計測失敗時もこの値で1レコード書き込むことで「時刻 = start_dt + index*interval」の
+// index と時刻の対応をズラさない (1区間=1レコードを保つ)。humidity は 0xFFFF(空き判定値)
+// 以外(=0)にして件数にカウントされるようにする。
+#define CO2_INVALID  0xFFFFu
 
 /**
  * @brief レコード番号をもとにアドレスを出力する

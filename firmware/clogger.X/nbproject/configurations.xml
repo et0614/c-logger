@@ -66,8 +66,6 @@
         <logicalFolder name="timer" displayName="timer" projectFiles="true">
           <itemPath>mcc_generated_files/timer/rtc.h</itemPath>
           <itemPath>mcc_generated_files/timer/delay.h</itemPath>
-          <itemPath>mcc_generated_files/timer/tca0.h</itemPath>
-          <itemPath>mcc_generated_files/timer/tca0_deprecated.h</itemPath>
         </logicalFolder>
         <logicalFolder name="usb" displayName="usb" projectFiles="true">
           <logicalFolder name="usb_cdc" displayName="usb_cdc" projectFiles="true">
@@ -184,7 +182,6 @@
           <logicalFolder name="src" displayName="src" projectFiles="true">
             <itemPath>mcc_generated_files/timer/src/rtc.c</itemPath>
             <itemPath>mcc_generated_files/timer/src/delay.c</itemPath>
-            <itemPath>mcc_generated_files/timer/src/tca0.c</itemPath>
           </logicalFolder>
         </logicalFolder>
         <logicalFolder name="usb" displayName="usb" projectFiles="true">

@@ -23,11 +23,9 @@ bool isLowBattery(void);
     
 void showError(short int errNum);
 
-void resetButtonHandler(void);
-
 void oneSecHandler(void);
 
-void msecHandler(void);
+void rstButtonHandler(void);
 
 void executeSecondlyTask(void);
 
@@ -38,8 +36,6 @@ bool getLoggingActive(void);
 // ソフトウェア時計 (UNIX epoch秒) の設定/取得
 void     Clock_Set(uint32_t epoch);
 uint32_t Clock_Get(void);
-
-void genDummyData(void);
 
 #ifdef	__cplusplus
 }
