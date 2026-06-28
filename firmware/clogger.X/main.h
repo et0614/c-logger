@@ -35,6 +35,10 @@ void executeSecondlyTask(void);
 void setLoggingActive(bool on);
 bool getLoggingActive(void);
 
+// ソフトウェア時計 (UNIX epoch秒) の設定/取得
+void     Clock_Set(uint32_t epoch);
+uint32_t Clock_Get(void);
+
 void genDummyData(void);
 
 #ifdef	__cplusplus

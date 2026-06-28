@@ -52,3 +52,37 @@ uint16_t USB_Comm_SendString(const char *str)
     }
     return count;
 }
+
+void USB_Comm_Flush(void)
+{
+    // 送信バッファの中身を確実にホストへ押し出す (STANDBYスリープ移行直前など、
+    // 応答を出してから寝るケースで使う)。USBスタックを少し多めに駆動して TX を drain する。
+    for (int i = 0; i < 50; i++)
+    {
+        USB_CDCVirtualSerialPortHandler();
+        DELAY_milliseconds(1);
+    }
+}
+
+uint16_t USB_Comm_SendBytes(const uint8_t *data, uint16_t len)
+{
+    // 生バイナリ送信 (0x00 を含むデータOK)。dump のバルク転送用。
+    uint16_t count = 0;
+    int budget_ms = 1000; // バルク用に長め (ホストが読まない時の待ち上限)
+
+    while (count < len)
+    {
+        if (USB_CDCWrite(data[count]) == CDC_SUCCESS)
+        {
+            count++;
+        }
+        else
+        {
+            // 送信バッファフル: USB スタックを駆動してドレインを進める
+            USB_CDCVirtualSerialPortHandler();
+            if (budget_ms-- <= 0) break;
+            DELAY_milliseconds(1);
+        }
+    }
+    return count;
+}

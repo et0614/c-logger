@@ -50,6 +50,10 @@ static uint8_t reset_timer = 0;
 
 static bool isLogging = false;
 
+//ソフトウェア時計 (UNIX epoch秒)。set_timeコマンドで設定し、PIT(1秒)毎にインクリメント。
+//各レコードの時刻は start_dt + index*interval で復元するため、start_dt の基準に使う。
+static uint32_t g_epoch = 0;
+
 // </editor-fold>
 
 // <editor-fold defaultstate="collapsed" desc="main">
@@ -228,8 +232,9 @@ void executeSecondlyTask(void)
 	}
 	else reset_timer = 0; //Resetボタン押し込み時間を0に戻す
 	
-    //稼働秒数を進める
+    //稼働秒数・ソフトウェア時計を1秒進める
     uptime_s++;
+    g_epoch++;
 
     //計測トリガ (非ブロッキング)*********************************
     // STCC4 single-shot の「トリガ」と「読み出し」を別tickに分割し、500msブロックを排除する。
@@ -267,6 +272,10 @@ void setLoggingActive(bool on)
         // ロギング開始時にSTCC4初期化 + rec_latest を Flash から復元する。
         // (boot時ではなくここで行うことで、USB通信モードをI2C非依存にし確実に列挙させる)
         Measurement_Initialize();
+        // 計測開始日時を現在のソフトウェア時計で記録(EEPROM保存)。
+        // dump時に各レコードの時刻を start_dt + index*interval_co2 で復元する。
+        EM_mSettings.start_dt = g_epoch;
+        EM_saveMeasurementSetting();
     }
     isLogging = on;
 }
@@ -275,6 +284,10 @@ bool getLoggingActive(void)
 {
     return isLogging;
 }
+
+// ソフトウェア時計 (UNIX epoch秒) の設定/取得。set_time / get_status から使う。
+void Clock_Set(uint32_t epoch) { g_epoch = epoch; }
+uint32_t Clock_Get(void)       { return g_epoch; }
 
 // 電池電圧計測 (PD3 = ADC0 AIN3 に VBAT が直接接続されている前提)
 // 基準電圧は VDD (3.3V regulated)、8 sample 積算で精度確保。

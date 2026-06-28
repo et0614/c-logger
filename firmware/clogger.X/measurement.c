@@ -72,6 +72,22 @@ bool Measurement_IsPending(void)
     return s_pending;
 }
 
+void Measurement_ClearData(void)
+{
+    // 既存データの件数を調べ、使用済みセクタ(4KB単位)を消去する。
+    // (全チップ消去は数十秒かかるため、使用分だけ消す)
+    uint32_t n = W25_Count_Record();
+    if (n > 0)
+    {
+        uint32_t lastAddr = W25_GetAddressFromRecordIndex(n - 1);
+        for (uint32_t addr = DATA_START_ADDR; addr <= lastAddr; addr += 4096)
+        {
+            W25_SectorErase(addr);
+        }
+    }
+    rec_latest = 0;
+}
+
 bool Measurement_ReadStore(void)
 {
     if (!s_pending) return false;

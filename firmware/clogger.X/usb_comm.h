@@ -35,6 +35,13 @@ void USB_Comm_Task(void);
 /// @return 実際に送信できたバイト数
 uint16_t USB_Comm_SendString(const char *str);
 
+/// 生バイナリを len バイト送信する (0x00 を含んでよい)。dump のバルク転送用。
+/// @return 実際に送信できたバイト数
+uint16_t USB_Comm_SendBytes(const uint8_t *data, uint16_t len);
+
+/// 送信バッファをホストへ確実に押し出す (応答送出後にSTANDBYへ移行する前に呼ぶ)。
+void USB_Comm_Flush(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -52,6 +52,11 @@ bool Measurement_IsPending(void);
 /// @return true:保存成功, false:未トリガ/計測失敗/Flash満杯
 bool Measurement_ReadStore(void);
 
+/// 保存済みデータを消去する (メモリ初期化)。使用済みセクタ(4KB単位)を物理消去し、
+/// rec_latest を 0 に戻す。空き判定(humidity==0xFFFF)が正しく働くよう物理消去する。
+/// 注意: 消去はブロッキング(セクタあたり約45ms)。データ量が多いと時間がかかる。
+void Measurement_ClearData(void);
+
 #ifdef __cplusplus
 }
 #endif

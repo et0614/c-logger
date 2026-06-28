@@ -2,7 +2,10 @@
 #include "jsmn.h"
 #include "usb_comm.h"   // USB_Comm_SendString
 #include "version.h"    // FW_VERSION / PROTOCOL_VERSION
-#include "main.h"       // getBatteryVoltage_mV
+#include "main.h"       // getBatteryVoltage_mV / Clock_Set/Get / setLoggingActive
+#include "eeprom_manager.h" // EM_mSettings / EM_saveMeasurementSetting
+#include "measurement.h"    // Measurement_ClearData
+#include "w25q64.h"         // W25_Count_Record (get_status)
 
 #include <string.h>
 #include <stdlib.h>
@@ -166,6 +169,8 @@ static void ph_start_logging(int32_t id, const char *json,
     (void)json; (void)t; (void)ntok; (void)params;
     setLoggingActive(true);
     reply_ok(id);
+    // この直後メインループがSTANDBYに入りUSBを処理しなくなるため、ackを確実に送出する。
+    USB_Comm_Flush();
 }
 
 // ロギング(計測)停止。USB通信モードに留まる。
@@ -175,6 +180,96 @@ static void ph_stop_logging(int32_t id, const char *json,
     (void)json; (void)t; (void)ntok; (void)params;
     setLoggingActive(false);
     reply_ok(id);
+}
+
+// 日時設定: params.epoch (UNIX秒) をソフトウェア時計に設定する。
+static void ph_set_time(int32_t id, const char *json,
+                        const jsmntok_t *t, int ntok, int params)
+{
+    int et = (params >= 0) ? obj_get(json, t, ntok, params, "epoch") : -1;
+    if (et < 0) { reply_error(id, "missing_epoch"); return; }
+    Clock_Set((uint32_t)tok_int(json, &t[et]));
+    reply_ok(id);
+}
+
+// 計測間隔設定: params.sec (秒) を interval_co2 に設定し EEPROM 保存する。
+static void ph_set_interval(int32_t id, const char *json,
+                            const jsmntok_t *t, int ntok, int params)
+{
+    int st = (params >= 0) ? obj_get(json, t, ntok, params, "sec") : -1;
+    if (st < 0) { reply_error(id, "missing_sec"); return; }
+    int32_t sec = tok_int(json, &t[st]);
+    if (sec <= 0) { reply_error(id, "invalid_sec"); return; }
+    EM_mSettings.interval_co2 = (unsigned int)sec;
+    EM_saveMeasurementSetting();
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"interval\":%ld}\n",
+             (long)id, (long)sec);
+    send_line(b);
+}
+
+// メモリ初期化: 保存済みデータを消去し件数を 0 にする。
+// (使用済みセクタの物理消去。データ量が多いと応答まで時間がかかる場合あり)
+static void ph_clear_memory(int32_t id, const char *json,
+                            const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    Measurement_ClearData();
+    reply_ok(id);
+}
+
+// 状態取得 (検証用): logging / interval / 保存件数 / 現在時刻 / 計測開始日時 を返す。
+static void ph_get_status(int32_t id, const char *json,
+                          const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    char b[192];
+    snprintf(b, sizeof(b),
+        "{\"id\":%ld,\"ok\":true,\"logging\":%s,\"interval\":%u,"
+        "\"count\":%lu,\"epoch\":%lu,\"start_dt\":%lu}\n",
+        (long)id,
+        getLoggingActive() ? "true" : "false",
+        (unsigned)EM_mSettings.interval_co2,
+        (unsigned long)W25_Count_Record(),
+        (unsigned long)Clock_Get(),
+        (unsigned long)EM_mSettings.start_dt);
+    send_line(b);
+}
+
+// データ読み出し (dump): フレーミングはJSON行、レコード本体は生バイナリで送る。
+//   ヘッダ(JSON行): {"id":N,"ok":true,"dump":"begin","count":M,"rec_size":6,"start_dt":S,"interval":IV}
+//   本体          : M個の SensorData_t を連続したバイナリで送出 (little-endian:
+//                   int16 temp(℃*100), uint16 hum(%*100), uint16 co2(ppm))
+//   フッタ(JSON行): {"id":N,"dump":"end"}
+// 受信側はヘッダの count*rec_size バイトを「行ではなく固定長で」読むので、バイナリ中に
+// '\n'/'{' が出ても誤認しない。時刻は start_dt + i*interval で復元する。件数はFlashから取得。
+static void ph_dump(int32_t id, const char *json,
+                    const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+
+    uint32_t count = W25_Count_Record();
+    char b[JP_REPLY_CAP];
+
+    // ヘッダ (JSON 1行)
+    snprintf(b, sizeof(b),
+        "{\"id\":%ld,\"ok\":true,\"dump\":\"begin\",\"count\":%lu,\"rec_size\":%u,"
+        "\"start_dt\":%lu,\"interval\":%u}\n",
+        (long)id, (unsigned long)count, (unsigned)sizeof(SensorData_t),
+        (unsigned long)EM_mSettings.start_dt, (unsigned)EM_mSettings.interval_co2);
+    send_line(b);
+
+    // レコード本体 (生バイナリ)
+    for (uint32_t i = 0; i < count; i++)
+    {
+        SensorData_t rec;
+        if (!W25_ReadRecord(i, &rec)) break; // 読み出し失敗で打ち切り
+        USB_Comm_SendBytes((const uint8_t *)&rec, sizeof(rec));
+    }
+
+    // フッタ (JSON 1行)
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"dump\":\"end\"}\n", (long)id);
+    send_line(b);
 }
 
 // コマンドテーブル (NULL 終端)
@@ -190,6 +285,11 @@ static const jp_command_t s_commands[] = {
     { "echo",          ph_echo          },
     { "start_logging", ph_start_logging },
     { "stop_logging",  ph_stop_logging  },
+    { "set_time",      ph_set_time      },
+    { "set_interval",  ph_set_interval  },
+    { "clear_memory",  ph_clear_memory  },
+    { "get_status",    ph_get_status    },
+    { "dump",          ph_dump          },
     { NULL,            NULL             }
 };
 

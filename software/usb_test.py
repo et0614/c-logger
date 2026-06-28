@@ -20,6 +20,9 @@ firmware の JSON コマンド (1行=1コマンド, '\\n' 終端) を送って�
 import sys
 import json
 import time
+import struct
+import csv
+from datetime import datetime
 
 try:
     import serial
@@ -107,6 +110,80 @@ class Clogger:
         self.ser.close()
 
 
+def do_dump(dev, save_csv=None):
+    """dump: ヘッダ(JSON行) → 本体(バイナリ count*rec_size) → フッタ(JSON行) を受信して復元。"""
+    dev._id += 1
+    dev.ser.write((json.dumps({"id": dev._id, "command": "dump"}) + "\n").encode("ascii"))
+
+    # ヘッダ(JSON行)を読む
+    hdr = None
+    for _ in range(5):
+        line = dev.ser.readline().decode("ascii", errors="replace").strip()
+        if line.startswith("{"):
+            try:
+                hdr = json.loads(line)
+            except json.JSONDecodeError:
+                hdr = None
+            break
+        if line == "":
+            break
+    if not hdr or hdr.get("dump") != "begin":
+        print("dumpヘッダ取得失敗:", hdr)
+        return
+
+    count    = hdr.get("count", 0)
+    rec_size = hdr.get("rec_size", 6)
+    start_dt = hdr.get("start_dt", 0)
+    interval = hdr.get("interval", 0)
+    nbytes   = count * rec_size
+    print(f"dump: count={count}, rec_size={rec_size}, start_dt={start_dt}, "
+          f"interval={interval}, bytes={nbytes}")
+
+    # 本体を「固定長」で読む(行ではなくバイト数で)
+    raw = bytearray()
+    while len(raw) < nbytes:
+        chunk = dev.ser.read(nbytes - len(raw))
+        if not chunk:
+            print(f"  ⚠ タイムアウト: {len(raw)}/{nbytes} バイトのみ受信")
+            break
+        raw += chunk
+
+    # フッタ(JSON行)を読む
+    footer = dev.ser.readline().decode("ascii", errors="replace").strip()
+    if '"dump":"end"' not in footer.replace(" ", ""):
+        print("  ⚠ フッタ未検出:", footer)
+
+    # 復元 (little-endian: int16 temp, uint16 hum, uint16 co2)
+    n = len(raw) // rec_size
+    rows = []
+    for i in range(n):
+        temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
+        ts = start_dt + i * interval
+        rows.append((i, ts, temp / 100.0, hum / 100.0, co2))
+
+    def fmt(r):
+        i, ts, t, h, c = r
+        tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")  # ローカル時刻
+        return f"  [{i}] {tstr}  temp={t:.2f}C hum={h:.2f}% co2={c}ppm"
+
+    for r in rows[:5]:
+        print(fmt(r))
+    if len(rows) > 10:
+        print(f"  ... ({len(rows) - 10} 件省略) ...")
+        for r in rows[-5:]:
+            print(fmt(r))
+    print(f"{n} レコード受信")
+
+    if save_csv:
+        with open(save_csv, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"])
+            for i, ts, t, h, c in rows:
+                tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                w.writerow([i, ts, tstr, f"{t:.2f}", f"{h:.2f}", c])
+        print(f"CSV保存: {save_csv}")
+
+
 def show(command, params, resp):
     p = json.dumps(params) if params else ""
     print(f"→ {command:13} {p}")
@@ -146,7 +223,15 @@ def main():
         show(command, params, dev.cmd(command, params))
 
     print("=== 対話モード ===  (空行 or 'quit' で終了)")
-    print("例:  hello   /   echo 7   /   get_battery")
+    print("使えるコマンド例:")
+    print("  hello / ping / get_battery / get_status / clear_memory")
+    print("  echo 7            n=7 を返す")
+    print("  set_interval 60   計測間隔を60秒に")
+    print("  set_time          現在のPC時刻(UNIX秒)を設定")
+    print("  set_time 1750000000   指定epochを設定")
+    print("  dump              保存データをバイナリ取得して表示")
+    print("  dump out.csv      取得してCSV保存")
+    print("  start_logging     計測開始(応答後USB切断。リセットで通信モードに戻る)")
     while True:
         try:
             s = input("cmd> ").strip()
@@ -157,14 +242,29 @@ def main():
         parts = s.split()
         command = parts[0]
         if command == "start_logging":
-            print("  ⚠ start_logging はロギングモードへ移行しUSBが切れます。送りません。")
+            print("  ⚠ ロギングモードに入り、応答(ack)の後にUSBが切断されます。")
+            print("←", dev.cmd(command, None) or "(応答なし)")
+            print("  デバイスはロギング中です。USBを抜いてOK。")
+            print("  通信に戻すにはデバイスをリセット → このツールを再起動 → dump で読み出し。")
+            continue
+        if command == "dump":
+            do_dump(dev, parts[1] if len(parts) > 1 else None)
             continue
         params = None
-        if command == "echo" and len(parts) > 1:
-            try:
+        try:
+            if command == "echo" and len(parts) > 1:
                 params = {"n": int(parts[1])}
-            except ValueError:
-                pass
+            elif command == "set_interval" and len(parts) > 1:
+                params = {"sec": int(parts[1])}
+            elif command == "set_time":
+                # 引数省略 or "now" → PCの現在時刻、数値ならその epoch
+                if len(parts) > 1 and parts[1] != "now":
+                    params = {"epoch": int(parts[1])}
+                else:
+                    params = {"epoch": int(time.time())}
+        except ValueError:
+            print("  引数が数値ではありません")
+            continue
         print("←", dev.cmd(command, params) or "(応答なし)")
 
     dev.close()
