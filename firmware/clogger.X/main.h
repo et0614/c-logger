@@ -31,6 +31,10 @@ void msecHandler(void);
 
 void executeSecondlyTask(void);
 
+// ロギング(計測)モードの開始/停止と状態取得 (USBコマンドから制御)
+void setLoggingActive(bool on);
+bool getLoggingActive(void);
+
 void genDummyData(void);
 
 #ifdef	__cplusplus

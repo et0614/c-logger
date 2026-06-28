@@ -157,6 +157,26 @@ static void ph_echo(int32_t id, const char *json,
     send_line(b);
 }
 
+// ロギング(計測)開始。応答後、メインループがロギングモードへ移行し、
+// STANDBYスリープ＋定期計測に入る。省電力のため以降USBは応答しなくなる
+// (再びUSB通信するにはデバイスをリセットしてUSB通信モードに戻す)。
+static void ph_start_logging(int32_t id, const char *json,
+                             const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    setLoggingActive(true);
+    reply_ok(id);
+}
+
+// ロギング(計測)停止。USB通信モードに留まる。
+static void ph_stop_logging(int32_t id, const char *json,
+                            const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    setLoggingActive(false);
+    reply_ok(id);
+}
+
 // コマンドテーブル (NULL 終端)
 typedef struct {
     const char    *name;
@@ -164,11 +184,13 @@ typedef struct {
 } jp_command_t;
 
 static const jp_command_t s_commands[] = {
-    { "ping",        ph_ping        },
-    { "hello",       ph_hello       },
-    { "get_battery", ph_get_battery },
-    { "echo",        ph_echo        },
-    { NULL,          NULL           }
+    { "ping",          ph_ping          },
+    { "hello",         ph_hello         },
+    { "get_battery",   ph_get_battery   },
+    { "echo",          ph_echo          },
+    { "start_logging", ph_start_logging },
+    { "stop_logging",  ph_stop_logging  },
+    { NULL,            NULL             }
 };
 
 // ============================================================

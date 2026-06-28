@@ -54,6 +54,7 @@ extern "C" {
 #include "../adc/adc0.h"
 #include "../i2c_host/twi0.h"
 #include "../spi/spi0.h"
+#include "../timer/tca0.h"
 /**
  * @ingroup systemdriver
  * @brief Initializes the System module. This routine is called only once during system initialization, before calling any other API.

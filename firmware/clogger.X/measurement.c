@@ -54,3 +54,41 @@ bool Measurement_Record(void)
     rec_latest++;
     return true;
 }
+
+// ====== 非ブロッキング計測 ======
+
+// single-shot をトリガ済みか (= 読み出し待ち)
+static bool s_pending = false;
+
+bool Measurement_Trigger(void)
+{
+    if (!STCC4_measureSingleShot()) return false; // I2Cコマンドのみ。即return
+    s_pending = true;
+    return true;
+}
+
+bool Measurement_IsPending(void)
+{
+    return s_pending;
+}
+
+bool Measurement_ReadStore(void)
+{
+    if (!s_pending) return false;
+    s_pending = false; // 読み出しは1回だけ
+
+    if (rec_latest >= MAX_RECORD_COUNT) return false; // 満杯停止
+
+    uint16_t co2;
+    float    temp_c, humi_pct;
+    if (!STCC4_readMeasurement(&co2, &temp_c, &humi_pct)) return false;
+
+    SensorData_t rec;
+    rec.temperature = (int16_t)(temp_c * 100.0f + (temp_c >= 0.0f ? 0.5f : -0.5f));
+    rec.humidity    = (uint16_t)(humi_pct * 100.0f + 0.5f);
+    rec.co2_ppm     = co2;
+
+    if (!W25_WriteRecord(rec_latest, &rec)) return false;
+    rec_latest++;
+    return true;
+}

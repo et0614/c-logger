@@ -54,13 +54,13 @@ void PIN_MANAGER_Initialize()
     PORTF.OUT = 0x0;
 
   /* DIR Registers Initialization */
-    PORTA.DIR = 0xD1;
+    PORTA.DIR = 0xD0;
     PORTC.DIR = 0x8;
     PORTD.DIR = 0x0;
     PORTF.DIR = 0x0;
 
   /* PINxCTRL registers Initialization */
-    PORTA.PIN0CTRL = 0x0;
+    PORTA.PIN0CTRL = 0x8;
     PORTA.PIN1CTRL = 0x0;
     PORTA.PIN2CTRL = 0x0;
     PORTA.PIN3CTRL = 0x0;

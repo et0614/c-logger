@@ -33,8 +33,24 @@ void Measurement_Initialize(void);
 bool Measurement_Sample(SensorData_t *out);
 
 /// 1回計測して Flash の rec_latest 位置に保存し、rec_latest を1進める。
+/// 内部で約500msブロックするので、USB等を止めたくない場合は下の非ブロッキングAPIを使う。
 /// @return true:保存成功, false:計測失敗 or Flash 満杯
 bool Measurement_Record(void);
+
+// ====== 非ブロッキング計測 (USBポーリングを止めないため) ======
+// single-shot のトリガと読み出しを分離する。トリガ後 500ms 以上経過してから
+// Measurement_ReadStore() を呼ぶこと (PIT 1秒周期なら「次のtick」で読めばよい)。
+
+/// single-shot 計測をトリガする (即 return)。@return true:トリガ成功
+bool Measurement_Trigger(void);
+
+/// トリガ済みの計測があるか (= 読み出し待ちか)
+bool Measurement_IsPending(void);
+
+/// トリガ済みの計測結果を読み出して Flash に保存し、rec_latest を1進める。
+/// トリガから500ms以上経過してから呼ぶこと。pending でなければ何もしない。
+/// @return true:保存成功, false:未トリガ/計測失敗/Flash満杯
+bool Measurement_ReadStore(void);
 
 #ifdef __cplusplus
 }

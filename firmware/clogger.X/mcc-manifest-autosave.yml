@@ -2,7 +2,7 @@
 
 manifest_file_version: 1.0.0
 project: clogger
-creation_date: 2026-06-20T13:36:27.392+09:00[Asia/Tokyo]
+creation_date: 2026-06-28T14:10:37.914+09:00[Asia/Tokyo]
 operating_system: Windows 11
 mcc_mode: IDE
 mcc_mode_version: v6.30
@@ -31,6 +31,7 @@ modules:
 - {name: '@mchp-mcc/scf-avr8-rtc-v1', type: MELODY, version: 4.2.5}
 - {name: '@mchp-mcc/scf-avr8-spi-v1', type: MELODY, version: 5.1.0}
 - {name: '@mchp-mcc/scf-avr8-syscfg-v1', type: MELODY, version: 1.0.0}
+- {name: '@mchp-mcc/scf-avr8-tca-v1', type: MELODY, version: 7.1.0}
 - {name: '@mchp-mcc/scf-avr8-twi-v1', type: MELODY, version: 8.2.0}
 - {name: '@mchp-mcc/scf-avr8-usb-v1', type: MELODY, version: 1.0.0}
 - {name: '@mchp-mcc/scf-avr8-vref-v1', type: MELODY, version: 4.1.0}
