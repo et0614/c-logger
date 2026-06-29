@@ -401,6 +401,7 @@ def main():
     print("  dumpc [file] [chunk] [pause_ms]  分割取得(切り分け用,既定 chunk=64 pause=300ms)")
     print("  peek <start> <count>             任意範囲を直接読む  例: peek 400 16")
     print("  start_logging     計測開始(応答後USB切断。リセットで通信モードに戻る)")
+    print("  factory_reset     CO2センサを工場出荷リセット(保守用,確認あり)")
     while True:
         try:
             s = input("cmd> ").strip()
@@ -442,6 +443,16 @@ def main():
                 print("  使い方: peek <start> <count>   例: peek 400 16")
                 continue
             do_peek(dev, int(parts[1]), int(parts[2]))
+            continue
+        if command == "factory_reset":
+            # 保守用: CO2センサ(STCC4)を工場出荷状態にリセット。誤操作防止に確認する。
+            print("  ⚠ CO2センサ(STCC4)を工場出荷状態にリセットします(保守用)。")
+            print("     ロガーの保存データ/設定は消えませんが、センサ内部の校正値が初期化されます。")
+            ans = input("  実行しますか? [y/N] ").strip().lower()
+            if ans != "y":
+                print("  中止しました。")
+                continue
+            print("←", dev.cmd(command, None) or "(応答なし)")
             continue
         params = None
         try:

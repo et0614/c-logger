@@ -50,6 +50,23 @@ static inline void blinkGreenLED(int iterNum)
 	}
 }
 
+// USB通信モードの生存表示用「2回点滅」ハートビート。
+// 50%デューティ点滅(平均点灯~500ms/s)に対し、短いパルス2発で平均点灯を~16ms/sまで
+// 落として省電力化する(LED電力 約30分の1)。総ブロッキングは~96msに抑え、USBポーリング/
+// コマンド応答への影響を小さく保つ(PCツールは2sタイムアウト+リトライなので無影響)。
+#define LED_HB_PULSE_MS  8   // 1パルスの点灯時間
+#define LED_HB_GAP_MS    80  // パルス間の消灯(2回点滅に見える最小間隔)
+static inline void blinkGreenLEDHeartbeat(void)
+{
+    turnOnGreenLED();
+    _delay_ms(LED_HB_PULSE_MS);
+    turnOffGreenLED();
+    _delay_ms(LED_HB_GAP_MS);
+    turnOnGreenLED();
+    _delay_ms(LED_HB_PULSE_MS);
+    turnOffGreenLED();
+}
+
 #ifdef	__cplusplus
 }
 #endif

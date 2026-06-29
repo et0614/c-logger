@@ -28,6 +28,22 @@ extern uint32_t rec_latest;
 /// SYSTEM_Initialize() / SPI0_Open() の後に1回呼ぶこと。
 void Measurement_Initialize(void);
 
+/// 長期未通電からの復帰用コンディショニングを開始する (STCC4 datasheet 推奨)。
+/// コマンド送信のみで即 return する。送信後 約22秒はセンサが他コマンドを受け付けない
+/// ので、呼び出し側で MEASUREMENT_CONDITIONING_SEC 秒待ってから計測を始めること。
+/// @return true:コマンド送信成功
+bool Measurement_StartConditioning(void);
+
+/// コンディショニング完了までの待ち秒数 (datasheet 22秒 + 余裕)。
+#define MEASUREMENT_CONDITIONING_SEC  24
+
+/// CO2センサ(STCC4)を工場出荷状態にリセットする (センサ内部の校正値等が初期化される)。
+/// ソフトリセットで idle にしてから実行する。約100msブロックする。
+/// 注意: これはセンサのリセットであり、ロガーのFlashデータ/EEPROM設定は消さない。
+/// 通常運用では不要で、長期保管後やセンサ異常時の保守用。
+/// @return true:成功(センサが正常応答), false:I2C/CRC/応答エラー
+bool Measurement_FactoryReset(void);
+
 /// 1回計測して結果を out に詰める (Flash には書き込まない)。
 /// @return true:成功, false:通信/CRCエラー
 bool Measurement_Sample(SensorData_t *out);

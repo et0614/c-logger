@@ -24,6 +24,23 @@ void Measurement_Initialize(void)
     rec_latest = W25_Count_Record();
 }
 
+bool Measurement_StartConditioning(void)
+{
+    // CMD 送信のみ (即 return)。以降 約22秒はセンサが他コマンドを受け付けないため、
+    // 呼び出し側が MEASUREMENT_CONDITIONING_SEC 秒待ってから計測を始めること。
+    // Measurement_Initialize() (ソフトリセット=idle) の直後に呼ぶ前提。
+    return STCC4_performConditioning();
+}
+
+bool Measurement_FactoryReset(void)
+{
+    // まず general-call ソフトリセットで既知の idle 状態に戻す (sleep中や計測中でも確実に
+    // コマンドを受け付けさせるため)。STCC4_initialize() 内で 10ms 待機する。
+    STCC4_initialize();
+    // 工場出荷リセット (CMD送信→90ms→応答0x0000を確認)。センサ内部の校正値等を初期化する。
+    return STCC4_performFactoryReset();
+}
+
 bool Measurement_Sample(SensorData_t *out)
 {
     uint16_t co2;

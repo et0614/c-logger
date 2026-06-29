@@ -218,6 +218,17 @@ static void ph_clear_memory(int32_t id, const char *json,
     reply_ok(id);
 }
 
+// 工場出荷リセット (保守用): CO2センサ(STCC4)を工場出荷状態に戻す。
+// 一般ユーザーは使わない。ロガーのFlashデータ/設定は消さず、センサ内部のみ初期化する。
+// 約100msブロックしてからセンサの応答可否で ok/error を返す。
+static void ph_factory_reset(int32_t id, const char *json,
+                             const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    if (Measurement_FactoryReset()) reply_ok(id);
+    else                            reply_error(id, "factory_reset_failed");
+}
+
 // 状態取得 (検証用): logging / interval / 保存件数 / 現在時刻 / 計測開始日時 を返す。
 static void ph_get_status(int32_t id, const char *json,
                           const jsmntok_t *t, int ntok, int params)
@@ -359,6 +370,7 @@ static const jp_command_t s_commands[] = {
     { "set_time",      ph_set_time      },
     { "set_interval",  ph_set_interval  },
     { "clear_memory",  ph_clear_memory  },
+    { "factory_reset", ph_factory_reset },
     { "get_status",    ph_get_status    },
     { "dump",          ph_dump          },
     { "dump_range",    ph_dump_range    },

@@ -6,7 +6,7 @@
  *
  * 動作モード:
  *   USB通信モード (起動時の既定, isLogging=false):
- *     USBをポーリングしてPCコマンドを処理。LEDを1秒ごとにOn/Off(ハートビート)。
+ *     USBをポーリングしてPCコマンドを処理。LEDは省電力のため1秒ごとに2回点滅(ハートビート)。
  *   ロギングモード (start_loggingで移行, isLogging=true):
  *     STANDBYスリープ + PIT(1秒)で定期計測。省電力のためLEDは消灯のまま(点滅しない)。
  *     USBは処理しない。
@@ -55,6 +55,13 @@ static bool isLogging = false;
 //ソフトウェア時計 (UNIX epoch秒)。set_timeコマンドで設定し、PIT(1秒)毎にインクリメント。
 //各レコードの時刻は start_dt + index*interval_co2 で復元するため start_dt の基準に使う。
 static uint32_t g_epoch = 0;
+
+//コンディショニング(長期未通電復帰用)の残り待ち秒数。start_logging時にセットし、PIT毎に
+//デクリメント。0になるまで計測を始めない(その間はPITスリープで時間を消化する)。
+static uint8_t conditioning_wait = 0;
+
+//start_dt(1レコード目の時刻基準)を確定済みか。コンディショニング完了後の初回計測で確定する。
+static bool start_dt_set = false;
 
 // </editor-fold>
 
@@ -163,7 +170,7 @@ void executeSecondlyTask(void)
     // --- RSTボタン処理 & LED表示 -----------------------------------------
     //  ・押している間 : LED点灯 (計測できているか/生存の確認用)
     //  ・5秒以上長押し: ソフトウェアリセット → USB通信モードに戻る
-    //  ・非押し込み時 : USB通信モード=1秒ごとにOn/Off / ロギングモード=消灯(省電力)
+    //  ・非押し込み時 : USB通信モード=1秒ごとに2回点滅(省電力) / ロギングモード=消灯
     if (!RST_GetValue())  // 押し込み中 (アクティブLow)
     {
         turnOnGreenLED();
@@ -177,8 +184,8 @@ void executeSecondlyTask(void)
     else
     {
         reset_timer = 0;
-        if (isLogging) turnOffGreenLED();    // 計測モード: 消灯
-        else           turnToggleGreenLED(); // USB通信モード: 1秒ごとにOn/Off
+        if (isLogging) turnOffGreenLED();          // 計測モード: 消灯
+        else           blinkGreenLEDHeartbeat();   // USB通信モード: 2回点滅(省電力)
     }
 
     // --- 計測トリガ (非ブロッキング, 省電力のためLEDは点滅させない) -------
@@ -189,11 +196,32 @@ void executeSecondlyTask(void)
     static unsigned int sec = 0;
     if (isLogging && EM_mSettings.interval_co2 > 0)
     {
-        if (Measurement_IsPending()) Measurement_ReadStore(); // 前tickのトリガ分を保存
-        if (rec_latest < MAX_RECORD_COUNT)                    // 満杯でなければ次区間をトリガ
+        if (conditioning_wait > 0)
         {
-            if (sec == 0) Measurement_Trigger();
-            if (++sec >= EM_mSettings.interval_co2) sec = 0;
+            // コンディショニング中(約22秒)は計測しない。PITスリープで時間を消化し、
+            // センサが他コマンドを受け付ける状態に戻るのを待つ。
+            conditioning_wait--;
+            sec = 0; // 完了直後の最初のtickで sec==0 → trigger できるように
+        }
+        else
+        {
+            if (Measurement_IsPending()) Measurement_ReadStore(); // 前tickのトリガ分を保存
+            if (rec_latest < MAX_RECORD_COUNT)                    // 満杯でなければ次区間をトリガ
+            {
+                if (sec == 0)
+                {
+                    if (!start_dt_set)
+                    {
+                        // 1レコード目の時刻基準を「実際に計測を始める今」で確定する。
+                        // (コンディショニングの約22秒だけ start_logging 時刻から後ろにずれる)
+                        EM_mSettings.start_dt = g_epoch;
+                        EM_saveMeasurementSetting();
+                        start_dt_set = true;
+                    }
+                    Measurement_Trigger();
+                }
+                if (++sec >= EM_mSettings.interval_co2) sec = 0;
+            }
         }
     }
     else
@@ -215,10 +243,16 @@ void setLoggingActive(bool on)
         // 過去データは保持しない方針なので、毎回フラッシュ先頭(index 0)から記録する。
         // 使用済み領域を消去し rec_latest を 0 に戻す。
         Measurement_ClearData();
-        // 計測開始日時を現在のソフトウェア時計で記録(EEPROM保存)。
-        // dump時に各レコードの時刻を start_dt + index*interval_co2 で復元する。
-        EM_mSettings.start_dt = g_epoch;
-        EM_saveMeasurementSetting();
+        // 長期未通電からの復帰に備え、計測開始前に1度コンディショニング(約22秒)を実施する
+        // (STCC4 datasheet 推奨)。コマンド送信のみで即 return し、約22秒は executeSecondlyTask
+        // の conditioning_wait カウントダウン中(PITスリープ)で消化してから初回計測へ移る。
+        if (Measurement_StartConditioning())
+            conditioning_wait = MEASUREMENT_CONDITIONING_SEC;
+        else
+            conditioning_wait = 0; // 送信失敗時は従来どおり即計測へ(コンディショニング省略)
+        // start_dt(各レコードの時刻復元の基準)は、コンディショニング後の初回計測時に確定する。
+        // (executeSecondlyTask で start_dt_set を見て EEPROM 保存する)
+        start_dt_set = false;
     }
     isLogging = on;
 }

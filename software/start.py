@@ -131,6 +131,7 @@ def main():
 
         dev.cmd("start_logging")
         print("\n計測を開始しました。USB通信は切断されます。")
+        print("（最初の約22秒はセンサのコンディショニングを行い、その後に記録を開始します）")
         print("→ データを読み出すには: デバイスをリセット後、read.py を実行してください。")
     except (RuntimeError, json.JSONDecodeError) as e:
         print(f"エラー: {e}")
