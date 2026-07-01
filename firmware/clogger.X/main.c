@@ -283,10 +283,14 @@ uint16_t getBatteryVoltage_mV(void)
     return (uint16_t)battery_mv;
 }
 
-// 電池残量が小さくなったか否か (CR2032は3.0V。2.4Vで危険と判断する)
+// 電池残量が小さくなったか否か。
+// 電源は昇圧(TPS61021A, 3.3V出力, 入力0.5〜4.4V/起動0.9V)なので、電池電圧が下がっても
+// STCC4等は3.3V固定で動く。よって電池は深くまで使える(旧2.4Vカットオフは昇圧構成では
+// 容量の大半を捨てていた)。フラッシュ書込み中の昇圧ドロップアウト/ブラウンアウトに余裕を
+// 見て 1.5V をカットオフとする。
 bool isLowBattery(void)
 {
-    return getBatteryVoltage_mV() < 2400;
+    return getBatteryVoltage_mV() < 1500;
 }
 
 // エラー表示 (電池不足): 緑LEDを3秒ごとに1回点滅し続ける (停止状態)。

@@ -27,15 +27,15 @@ extern "C" {
 // ==========================================
 // 定数定義 (内部設定)
 // ==========================================
-#define RECORD_SIZE      sizeof(SensorData_t) // 6バイト
-#define RECS_PER_PAGE    42   // 1ページに入るレコード数 (256 / 6 = 42 余り 4)
+#define RECORD_SIZE      sizeof(SensorData_t) // 8バイト (temp/hum/co2/vbat)
+#define RECS_PER_PAGE    (PAGE_SIZE / RECORD_SIZE) // 1ページのレコード数 (256/8 = 32)
 #define DATA_START_ADDR  4096 // データ領域の開始位置 (最初の4KBは管理領域として飛ばす)
 #define PAGE_SIZE        256  // Flashのページサイズ
 #define FLASH_TOTAL_SIZE 0x800000 // 8MB (W25Q64 の総容量 (Byte))
 #define DATA_AREA_SIZE   (FLASH_TOTAL_SIZE - DATA_START_ADDR) // データ領域の総容量 = 総容量 - 予約領域(4KB)
 #define MAX_RECORD_COUNT ((DATA_AREA_SIZE / PAGE_SIZE) * RECS_PER_PAGE) // 保存可能な最大レコード数 (≒ 1.37M)
 
-// データ構造体の定義 (6 bytes, packed)
+// データ構造体の定義 (8 bytes, packed)
 //
 // タイムスタンプは保持しない。計測開始日時(start_dt)と計測間隔(interval)は
 // EEPROM(EM_mSettings)に別途記録し、各レコードの時刻は
@@ -49,6 +49,7 @@ typedef struct __attribute__((packed)) {
     int16_t  temperature;   // 温度     (単位: ℃ * 100)
     uint16_t humidity;      // 相対湿度 (単位: % * 100)  ※空き判定に使用 (0xFFFF=空き)
     uint16_t co2_ppm;       // CO2濃度  (単位: ppm)。CO2_INVALID なら欠測(計測失敗)レコード
+    uint16_t vbat_mV;       // 電池電圧 (単位: mV)。デバッグ/放電カーブ取得用に毎レコード記録
 } SensorData_t;
 
 // 欠測(計測失敗)マーカー: co2_ppm がこの値のレコードは無効。実在しないppm値を使う。

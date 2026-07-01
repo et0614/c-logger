@@ -120,25 +120,36 @@ class Clogger:
         if len(raw) < nbytes:
             raise RuntimeError(f"受信が不足しました: {len(raw)}/{nbytes} バイト")
 
-        # 復元 + CSV 出力 (little-endian: int16 temp, uint16 hum, uint16 co2)
+        # 復元 + CSV 出力 (little-endian: int16 temp, uint16 hum, uint16 co2[, uint16 vbat])
+        # rec_size>=8 のレコードは末尾に vbat_mV(電池電圧[mV], デバッグ用)を持つ。
+        has_vbat = rec_size >= 8
         rows = []
         n_invalid = 0
         n = len(raw) // rec_size
         with open(save_csv, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"])
+            header = ["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"]
+            if has_vbat:
+                header.append("vbat_mV")
+            w.writerow(header)
             for i in range(n):
-                temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
+                if has_vbat:
+                    temp, hum, co2, vbat = struct.unpack_from("<hHHH", raw, i * rec_size)
+                else:
+                    temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
+                    vbat = None
                 ts = start_dt + i * interval
                 tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
                 if co2 == CO2_INVALID:  # 欠測(計測失敗)
                     n_invalid += 1
-                    w.writerow([i, ts, tstr, "", "", ""])
-                    rows.append((i, tstr, None, None, None))
+                    row = [i, ts, tstr, "", "", ""]
+                    rows.append((i, tstr, None, None, None, vbat))
                 else:
-                    w.writerow([i, ts, tstr, f"{temp/100.0:.2f}",
-                                f"{hum/100.0:.2f}", co2])
-                    rows.append((i, tstr, temp / 100.0, hum / 100.0, co2))
+                    row = [i, ts, tstr, f"{temp/100.0:.2f}", f"{hum/100.0:.2f}", co2]
+                    rows.append((i, tstr, temp / 100.0, hum / 100.0, co2, vbat))
+                if has_vbat:
+                    row.append(vbat)
+                w.writerow(row)
         return {"count": n, "invalid": n_invalid, "rows": rows}
 
 
@@ -174,10 +185,11 @@ def main():
         rows = res["rows"]
 
         def fmt(r):
-            i, tstr, t, h, c = r
+            i, tstr, t, h, c, vb = r
+            vbs = f"  {vb}mV" if vb is not None else ""
             if t is None:
-                return f"  [{i}] {tstr}  (欠測)"
-            return f"  [{i}] {tstr}  {t:.2f}C {h:.2f}% {c}ppm"
+                return f"  [{i}] {tstr}  (欠測){vbs}"
+            return f"  [{i}] {tstr}  {t:.2f}C {h:.2f}% {c}ppm{vbs}"
 
         for r in rows[:3]:
             print(fmt(r))

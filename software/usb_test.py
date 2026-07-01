@@ -159,46 +159,50 @@ def do_dump(dev, save_csv=None):
     if '"dump":"end"' not in footer.replace(" ", ""):
         print("  ⚠ フッタ未検出:", footer)
 
-    # 復元 (little-endian: int16 temp, uint16 hum, uint16 co2)
-    # co2 == 0xFFFF(=CO2_INVALID) は欠測(計測失敗)レコード。
+    # 復元 (little-endian: int16 temp, uint16 hum, uint16 co2[, uint16 vbat])
+    # co2 == 0xFFFF(=CO2_INVALID) は欠測(計測失敗)レコード。rec_size>=8 は末尾に vbat_mV。
     CO2_INVALID = 0xFFFF
+    has_vbat = rec_size >= 8
     n = len(raw) // rec_size
     rows = []
     n_invalid = 0
     for i in range(n):
-        temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
+        if has_vbat:
+            temp, hum, co2, vbat = struct.unpack_from("<hHHH", raw, i * rec_size)
+        else:
+            temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
+            vbat = None
         ts = start_dt + i * interval
         if co2 == CO2_INVALID:
             n_invalid += 1
-            rows.append((i, ts, None, None, None))  # 欠測
+            rows.append((i, ts, None, None, None, vbat))  # 欠測
         else:
-            rows.append((i, ts, temp / 100.0, hum / 100.0, co2))
-
-    def fmt(r):
-        i, ts, t, h, c = r
-        tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")  # ローカル時刻
-        if t is None:
-            return f"  [{i}] {tstr}  (欠測 / invalid)"
-        return f"  [{i}] {tstr}  temp={t:.2f}C hum={h:.2f}% co2={c}ppm"
+            rows.append((i, ts, temp / 100.0, hum / 100.0, co2, vbat))
 
     for r in rows[:5]:
-        print(fmt(r))
+        print(_fmt_row(r))
     if len(rows) > 10:
         print(f"  ... ({len(rows) - 10} 件省略) ...")
         for r in rows[-5:]:
-            print(fmt(r))
+            print(_fmt_row(r))
     print(f"{n} レコード受信 (うち欠測 {n_invalid} 件)")
 
     if save_csv:
         with open(save_csv, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"])
-            for i, ts, t, h, c in rows:
+            header = ["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"]
+            if has_vbat:
+                header.append("vbat_mV")
+            w.writerow(header)
+            for i, ts, t, h, c, vb in rows:
                 tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
                 if t is None:
-                    w.writerow([i, ts, tstr, "", "", ""])  # 欠測は空欄
+                    row = [i, ts, tstr, "", "", ""]  # 欠測は空欄
                 else:
-                    w.writerow([i, ts, tstr, f"{t:.2f}", f"{h:.2f}", c])
+                    row = [i, ts, tstr, f"{t:.2f}", f"{h:.2f}", c]
+                if has_vbat:
+                    row.append(vb)
+                w.writerow(row)
         print(f"CSV保存: {save_csv}")
 
 
@@ -252,27 +256,33 @@ def _read_range(dev, start, count, read_timeout=2.0, idle_limit=3):
 
 def _decode_rows(raw, rec_size, start_dt, interval, base_index=0):
     CO2_INVALID = 0xFFFF
+    has_vbat = rec_size >= 8   # 8バイト=末尾に vbat_mV
     n = len(raw) // rec_size
     rows = []
     n_invalid = 0
     for i in range(n):
-        temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
+        if has_vbat:
+            temp, hum, co2, vbat = struct.unpack_from("<hHHH", raw, i * rec_size)
+        else:
+            temp, hum, co2 = struct.unpack_from("<hHH", raw, i * rec_size)
+            vbat = None
         idx = base_index + i
         ts = start_dt + idx * interval
         if co2 == CO2_INVALID:
             n_invalid += 1
-            rows.append((idx, ts, None, None, None))
+            rows.append((idx, ts, None, None, None, vbat))
         else:
-            rows.append((idx, ts, temp / 100.0, hum / 100.0, co2))
+            rows.append((idx, ts, temp / 100.0, hum / 100.0, co2, vbat))
     return rows, n_invalid
 
 
 def _fmt_row(r):
-    i, ts, t, h, c = r
+    i, ts, t, h, c, vb = r
     tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    vbs = f" vbat={vb}mV" if vb is not None else ""
     if t is None:
-        return f"  [{i}] {tstr}  (欠測 / invalid)"
-    return f"  [{i}] {tstr}  temp={t:.2f}C hum={h:.2f}% co2={c}ppm"
+        return f"  [{i}] {tstr}  (欠測 / invalid){vbs}"
+    return f"  [{i}] {tstr}  temp={t:.2f}C hum={h:.2f}% co2={c}ppm{vbs}"
 
 
 def do_peek(dev, start, count):
@@ -339,15 +349,22 @@ def do_dump_chunked(dev, save_csv=None, chunk=64, pause_ms=300):
             print(_fmt_row(r))
 
     if save_csv:
+        has_vbat = rec_size >= 8
         with open(save_csv, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"])
-            for i, ts, t, h, c in rows:
+            header = ["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"]
+            if has_vbat:
+                header.append("vbat_mV")
+            w.writerow(header)
+            for i, ts, t, h, c, vb in rows:
                 tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
                 if t is None:
-                    w.writerow([i, ts, tstr, "", "", ""])
+                    row = [i, ts, tstr, "", "", ""]
                 else:
-                    w.writerow([i, ts, tstr, f"{t:.2f}", f"{h:.2f}", c])
+                    row = [i, ts, tstr, f"{t:.2f}", f"{h:.2f}", c]
+                if has_vbat:
+                    row.append(vb)
+                w.writerow(row)
         print(f"CSV保存: {save_csv}")
 
 
