@@ -1,7 +1,6 @@
 #include "measurement.h"
 #include "stcc4.h"
 #include "w25q64.h"
-#include "main.h"   // getBatteryVoltage_mV (VBATロギング用)
 #include "mcc_generated_files/timer/delay.h"
 
 // STCC4 single-shot 計測の完了待ち時間 [ms] (datasheet: 約500ms)
@@ -61,8 +60,6 @@ bool Measurement_Sample(SensorData_t *out)
     out->humidity    = (uint16_t)(humi_pct * 100.0f + 0.5f);
     //  CO2: ppm をそのまま
     out->co2_ppm     = co2;
-    //  VBAT: 電池電圧[mV] (デバッグ/放電カーブ用)
-    out->vbat_mV     = getBatteryVoltage_mV();
 
     return true;
 }
@@ -133,8 +130,6 @@ bool Measurement_ReadStore(void)
         rec.humidity    = 0;          // 0xFFFF(空き)以外 → 件数にカウントされる
         rec.co2_ppm     = CO2_INVALID; // 欠測マーカー
     }
-    // VBAT: 成功/欠測どちらの区間でも電池電圧[mV]を記録 (デバッグ/放電カーブ用)
-    rec.vbat_mV = getBatteryVoltage_mV();
 
     if (!W25_WriteRecord(rec_latest, &rec)) return false;
     rec_latest++;
