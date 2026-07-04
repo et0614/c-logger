@@ -171,6 +171,9 @@ static void ph_start_logging(int32_t id, const char *json,
     reply_ok(id);
     // この直後メインループがSTANDBYに入りUSBを処理しなくなるため、ackを確実に送出する。
     USB_Comm_Flush();
+    // ack送出後にUSBを完全停止する。USB有効のままだとOSCHF(12MHz)が起き続けSTANDBYでも
+    // ~2mA消費するため(実測)。以降USB送信不可。通信に戻すにはリセット。
+    USB_Comm_Disable();
 }
 
 // ロギング(計測)停止。USB通信モードに留まる。

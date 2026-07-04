@@ -46,6 +46,13 @@ void USB_Comm_Flush(void);
 /// dump等の長時間バルク送信中に定期的に呼び、デバイスを無応答化させない(ホスト側パイプ停止防止)。
 void USB_Comm_Pump(void);
 
+/// USBモジュールを完全停止する (ロギング=省電力モード移行時に使う)。
+/// USBが有効だと主発振 OSCHF(12MHz) が起き続け、STANDBYでも ~2mA 消費するため、
+/// バスからdetachしてUSBEN=0にし、OSCHFがSTANDBYで停止できるようにする。
+/// 【重要】必ず最後の応答を USB_Comm_Flush() で送出した後に呼ぶこと(呼ぶとUSB送信不可)。
+/// USB通信に戻すにはデバイスをリセット(SYSTEM_Initializeで再有効化)。
+void USB_Comm_Disable(void);
+
 #ifdef __cplusplus
 }
 #endif

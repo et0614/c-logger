@@ -4,6 +4,7 @@
 #include "mcc_generated_files/usb/usb_device.h"                        // USBDevice_Handle
 #include "mcc_generated_files/usb/usb_cdc/usb_cdc_virtual_serial_port.h" // USB_CDCxxx
 #include "mcc_generated_files/timer/delay.h"                          // DELAY_milliseconds
+#include <avr/io.h>                                                   // USB0 / USB_ENABLE_bm / USB_ATTACH_bm
 
 void USB_Comm_Initialize(void)
 {
@@ -104,4 +105,16 @@ uint16_t USB_Comm_SendBytes(const uint8_t *data, uint16_t len)
     // 生バイナリ送信 (0x00 を含むデータOK)。dump のバルク転送用。
     // 文字列送信と同じ欠落しない送出経路 (send_block) を使う。
     return send_block(data, len);
+}
+
+void USB_Comm_Disable(void)
+{
+    // ロギング(省電力)移行時にUSBモジュールを完全停止する。
+    // 【なぜ】USBが有効(USBEN=1)だと主発振 OSCHF(12MHz) をSTANDBY中も要求し続け、MCUが
+    // 実質スリープできず ~2mA 消費する(実測)。detach + USBEN=0 で OSCHF が STANDBY で
+    // 停止できるようにし、ベース電流を大幅に下げる。
+    // 【前提】最後の応答は呼び出し側が USB_Comm_Flush() 済みであること(これ以降USB送信不可)。
+    // 【復帰】USB通信に戻すにはリセット(SYSTEM_Initialize が USB を再有効化)。
+    USB0.CTRLB &= ~USB_ATTACH_bm;   // バスから detach (ホストには切断として見える)
+    USB0.CTRLA &= ~USB_ENABLE_bm;   // USBモジュール無効化 → OSCHFクロック要求を解除
 }
