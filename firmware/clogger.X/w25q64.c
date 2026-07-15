@@ -92,7 +92,33 @@ static bool W25_WriteData(uint32_t address, uint8_t *data, uint16_t len) {
 // 公開関数
 // ==========================================
 
-uint32_t W25_GetAddressFromRecordIndex(uint32_t index) {    
+// JEDEC ID (0x9F): id[0]=メーカ, id[1]=メモリタイプ, id[2]=容量。Winbond は id[0]==0xEF。
+bool W25_ReadJEDECID(uint8_t id[3]) {
+    SPI_CS_SetLow();
+    SPI0_ByteExchange(0x9F);
+    id[0] = SPI0_ByteExchange(0x00);
+    id[1] = SPI0_ByteExchange(0x00);
+    id[2] = SPI0_ByteExchange(0x00);
+    SPI_CS_SetHigh();
+    return (id[0] != 0x00 && id[0] != 0xFF); // 0x00/0xFF は未接続/バス異常
+}
+
+// write/read/verify セルフテスト。予約領域(先頭4KB, DATA_START_ADDR=4096 より前)をスクラッチに
+// 使うので保存データ(index 0 以降)は消えない。消去→パターン書込→読出→照合。
+bool W25_SelfTest(void) {
+    const uint32_t addr = 0; // 予約領域の先頭セクタ(現状未使用)
+    uint8_t wr[16], rd[16];
+    for (uint8_t i = 0; i < sizeof(wr); i++) wr[i] = (uint8_t)(0xA5 ^ i);
+
+    W25_SectorErase(addr);                          // 4KBセクタ消去 (全bit=1)
+    if (!W25_WriteData(addr, wr, sizeof(wr))) return false;
+    if (!W25_ReadData(addr, rd, sizeof(rd)))  return false;
+    for (uint8_t i = 0; i < sizeof(wr); i++)
+        if (rd[i] != wr[i]) return false;           // 照合不一致
+    return true;
+}
+
+uint32_t W25_GetAddressFromRecordIndex(uint32_t index) {
     // 最大レコード数を超える場合は逸脱したアドレスを出力
     if (MAX_RECORD_COUNT <= index) return FLASH_TOTAL_SIZE + 1;
 

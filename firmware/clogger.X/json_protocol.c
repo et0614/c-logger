@@ -250,6 +250,60 @@ static void ph_get_status(int32_t id, const char *json,
     send_line(b);
 }
 
+// ライブ計測 (Flash保存なし): STCC4 single-shot で co2/温湿度を1回取得して返す。
+// USB接続のままセンサ確認/外気校正(FRC)確認に使う。内部で約500msブロックする。
+static void ph_measure(int32_t id, const char *json,
+                       const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    SensorData_t rec;
+    if (!Measurement_LiveSample(&rec)) { reply_error(id, "measure_failed"); return; }
+    int16_t tc = rec.temperature;                 // ℃*100
+    int th = tc / 100, tl = tc % 100; if (tl < 0) tl = -tl;
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b),
+        "{\"id\":%ld,\"ok\":true,\"co2_ppm\":%u,\"temp_C\":%d.%02d,\"hum_pct\":%u.%02u}\n",
+        (long)id, (unsigned)rec.co2_ppm, th, tl,
+        (unsigned)(rec.humidity / 100), (unsigned)(rec.humidity % 100));
+    send_line(b);
+}
+
+// セルフテスト: フラッシュ(JEDEC ID + write/read/verify) / STCC4(I2C ACK) / ライブ計測 を一括診断。
+static void ph_selftest(int32_t id, const char *json,
+                        const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+
+    uint8_t fid[3] = { 0, 0, 0 };
+    bool flash_id = W25_ReadJEDECID(fid);
+    bool flash_rw = W25_SelfTest();
+    bool stcc4_ok = Measurement_SensorConnected();
+
+    SensorData_t rec;
+    bool meas_ok = Measurement_LiveSample(&rec);
+    int th = 0, tl = 0; unsigned hh = 0, hl = 0, co2 = 0;
+    if (meas_ok)
+    {
+        int16_t tc = rec.temperature;
+        th = tc / 100; tl = tc % 100; if (tl < 0) tl = -tl;
+        hh = rec.humidity / 100; hl = rec.humidity % 100; co2 = rec.co2_ppm;
+    }
+    bool all_ok = flash_id && flash_rw && stcc4_ok && meas_ok;
+
+    char b[256];
+    snprintf(b, sizeof(b),
+        "{\"id\":%ld,\"ok\":%s,"
+        "\"flash\":{\"ok\":%s,\"rw\":%s,\"jedec\":\"%02X%02X%02X\"},"
+        "\"stcc4\":{\"connected\":%s},"
+        "\"sensor\":{\"ok\":%s,\"co2_ppm\":%u,\"temp_C\":%d.%02d,\"hum_pct\":%u.%02u}}\n",
+        (long)id, all_ok ? "true" : "false",
+        flash_id ? "true" : "false", flash_rw ? "true" : "false",
+        fid[0], fid[1], fid[2],
+        stcc4_ok ? "true" : "false",
+        meas_ok ? "true" : "false", co2, th, tl, hh, hl);
+    send_line(b);
+}
+
 // 1回の送出にまとめるレコード数 (6B*40=240B。CDC送信バッファ512B以内)。
 // 1レコードずつ送ると転送回数が増えて遅いので、まとめて USB_Comm_SendBytes に渡す。
 #define DUMP_BATCH_RECS  40
@@ -375,6 +429,8 @@ static const jp_command_t s_commands[] = {
     { "clear_memory",  ph_clear_memory  },
     { "factory_reset", ph_factory_reset },
     { "get_status",    ph_get_status    },
+    { "measure",       ph_measure       },
+    { "selftest",      ph_selftest      },
     { "dump",          ph_dump          },
     { "dump_range",    ph_dump_range    },
     { NULL,            NULL             }

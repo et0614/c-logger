@@ -12,16 +12,43 @@ uint32_t rec_latest = 0;
 // single-shot をトリガ済みか (= 読み出し待ち)
 static bool s_pending = false;
 
+// STCC4を初期化済みか (USB通信モードでの live計測/セルフテスト用)。
+static bool s_sensor_inited = false;
+
 void Measurement_Initialize(void)
 {
     // STCC4 ソフトリセット (general call) で既知の状態にする
     STCC4_initialize();
     DELAY_milliseconds(10);
+    s_sensor_inited = true; // 初期化済みとして記録
 
     s_pending = false; // 読み出し待ちをクリア (セッション開始時の整合)
 
     // Flash に保存済みのレコード数を復元 → 次の書き込み位置
     rec_latest = W25_Count_Record();
+}
+
+void Measurement_EnsureSensor(void)
+{
+    // まだ初期化していなければソフトリセットで idle にする。2回目以降は何もしない
+    // (毎回ソフトリセットすると bypass位相で CO2 が 390ppm を返すため避ける)。
+    if (!s_sensor_inited)
+    {
+        STCC4_initialize();
+        DELAY_milliseconds(10);
+        s_sensor_inited = true;
+    }
+}
+
+bool Measurement_SensorConnected(void)
+{
+    return STCC4_isConnected();
+}
+
+bool Measurement_LiveSample(SensorData_t *out)
+{
+    Measurement_EnsureSensor();
+    return Measurement_Sample(out); // single-shot → 500ms待ち → 読み出し (Flash保存なし)
 }
 
 bool Measurement_StartConditioning(void)

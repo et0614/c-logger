@@ -44,6 +44,18 @@ bool Measurement_StartConditioning(void);
 /// @return true:成功(センサが正常応答), false:I2C/CRC/応答エラー
 bool Measurement_FactoryReset(void);
 
+/// STCC4を(まだなら)初期化する。USB通信モードでは boot時に初期化していないため、
+/// live計測/セルフテストの前に呼ぶ。2回目以降は何もしない(ソフトリセットのbypass位相を避ける)。
+void Measurement_EnsureSensor(void);
+
+/// STCC4がI2Cバス上に存在するか (ACK確認)。セルフテスト用。@return true:応答あり
+bool Measurement_SensorConnected(void);
+
+/// ライブ計測 (Flashに保存しない): STCC4を(必要なら)初期化し single-shot で1回計測して out に詰める。
+/// USB接続のままセンサ動作確認/外気校正確認に使う。内部で約500msブロックする。
+/// @return true:成功, false:通信/CRCエラー
+bool Measurement_LiveSample(SensorData_t *out);
+
 /// 1回計測して結果を out に詰める (Flash には書き込まない)。
 /// @return true:成功, false:通信/CRCエラー
 bool Measurement_Sample(SensorData_t *out);

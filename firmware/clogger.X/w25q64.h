@@ -113,6 +113,20 @@ bool W25_ReadOnePage(uint32_t pageIndex, uint8_t *buffer);
 
 
 /**
+ * @brief JEDEC ID (0x9F) を読み出す。id[0]=メーカ, id[1]=メモリタイプ, id[2]=容量。
+ *        Winbond は id[0]==0xEF。SPI疎通とチップ存在の確認用(非破壊)。
+ * @return true:応答あり(0x00/0xFF以外), false:未接続/異常
+ */
+bool W25_ReadJEDECID(uint8_t id[3]);
+
+/**
+ * @brief フラッシュの write/read/verify セルフテスト。予約領域(先頭4KB, データ領域外)を
+ *        スクラッチに使うので保存データは消さない。消去→パターン書込→読出→照合。
+ * @return true:一致(書込/読出/消去OK), false:不一致/失敗
+ */
+bool W25_SelfTest(void);
+
+/**
  * @brief 保存済み(有効)レコードの件数を返す。
  *        書き込みは index 0 から連番の満杯停止方式なので、有効レコードは flash 先頭から
  *        連続して並ぶ。「最初に空き(humidity==0xFFFF)になる index」を二分探索で求め、
