@@ -45,7 +45,7 @@ VelocityCharacteristicCoefficients EM_vcCoefficients;
 MeasurementSettings EM_mSettings;
 
 //名称
-char EM_mlName[21];
+char EM_clName[21];
 
 // <editor-fold defaultstate="collapsed" desc="inline関数の定義">
 
@@ -212,7 +212,7 @@ static void initMemory()
 	writeMSettings();
         
 	//名前
-	//write_eep_block((const void *)ML_NAME, ADDR_NAME, sizeof(EM_mlName));
+	//write_eep_block((const void *)ML_NAME, ADDR_NAME, sizeof(EM_clName));
 	
     //データ世代番号
     while(EEPROM_IsBusy());
@@ -282,7 +282,7 @@ static void loadMSettings()
 //名称を読み込む
 static void loadName()
 {
-	read_eep_block((void *)EM_mlName, ADDR_NAME, sizeof(EM_mlName));
+	read_eep_block((void *)EM_clName, ADDR_NAME, sizeof(EM_clName));
 }
 
 // </editor-fold>
@@ -301,7 +301,7 @@ void EM_saveMeasurementSetting()
 //名称を書き込む
 void EM_saveName()
 {
-	write_eep_block((const void *)EM_mlName, ADDR_NAME, sizeof(EM_mlName));
+	write_eep_block((const void *)EM_clName, ADDR_NAME, sizeof(EM_clName));
 }
 
 //補正係数を保存する (v4 set_correction 用)

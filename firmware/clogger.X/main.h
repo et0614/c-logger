@@ -20,6 +20,9 @@ extern "C" {
 uint16_t getBatteryVoltage_mV(void);
 
 bool isLowBattery(void);
+
+// 機体固有ID (AVRシリコンシリアル由来, 読み取り専用)
+uint32_t Device_GetID(void);
     
 void showError(short int errNum);
 

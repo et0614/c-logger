@@ -294,6 +294,21 @@ bool isLowBattery(void)
     return getBatteryVoltage_mV() < 2000;
 }
 
+// 機体固有ID。AVRのシリコンシリアル(SIGROW.SERNUM, 16バイト)を FNV-1a(32bit)で
+// ハッシュして返す。ユーザー変更不可・機器ごとに(ほぼ)一意。get_id コマンドが返す。
+// (poem プロジェクトと同方式。BACnet制約が無いので32bitのまま使う)
+uint32_t Device_GetID(void)
+{
+    const volatile uint8_t *sn = &SIGROW.SERNUM0; // SERNUM0..15 は連続配置
+    uint32_t hash = 2166136261UL;                 // FNV-1a offset basis
+    for (uint8_t i = 0; i < 16; i++)
+    {
+        hash ^= sn[i];
+        hash *= 16777619UL;                        // FNV prime
+    }
+    return hash;
+}
+
 // エラー表示 (電池不足): 緑LEDを3秒ごとに1回点滅し続ける (停止状態)。
 void showError(short int errNum)
 {

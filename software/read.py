@@ -7,9 +7,12 @@ USB接続した c-logger の保存データを読み出して CSV に保存す�
 計測中のデバイスは、リセットして USB通信モードに戻してから実行すること。
 
 使い方:
-    python read.py                 # clogger_data.csv に保存
+    python read.py                 # 計測開始日時から自動命名して保存 (重複しない)
     python read.py mydata.csv      # 指定ファイル名で保存
     python read.py -p COM3         # ポートを明示指定
+
+自動命名例: clogger_A1B2C3D4_20260706_162858.csv  (機体ID + 計測開始日時)
+           (機体IDが取れない旧FW等では clogger_20260706_162858.csv)
 
 CSV列: index, epoch, datetime, temp_C, hum_pct, co2_ppm
        (計測失敗(欠測)レコードは temp/hum/co2 が空欄)
@@ -47,6 +50,17 @@ def find_port():
     return None
 
 
+def auto_filename(start_dt, device_id=None):
+    """重複しない出力CSV名を作る。機体ID(あれば)+計測開始日時(無ければ現在時刻)で識別する。"""
+    stamp = datetime.fromtimestamp(start_dt) if start_dt else datetime.now()
+    ts = stamp.strftime("%Y%m%d_%H%M%S")
+    if device_id:
+        safe = "".join(c for c in str(device_id) if c.isalnum())
+        if safe:
+            return f"clogger_{safe}_{ts}.csv"
+    return f"clogger_{ts}.csv"
+
+
 class Clogger:
     """c-logger からのデータ読み出し (dump)。"""
 
@@ -67,8 +81,25 @@ class Clogger:
         except Exception:
             pass
 
-    def dump(self, save_csv):
-        """保存データを取得し CSV に保存する。取得概要(dict)を返す。
+    def get_device_id(self):
+        """機体固有ID(hex文字列)を取得する。取れなければ None (旧FWなど)。"""
+        self._id += 1
+        self.ser.write((json.dumps({"id": self._id, "command": "get_id"}) + "\n")
+                       .encode("ascii"))
+        for _ in range(5):
+            line = self.ser.readline().decode("ascii", errors="replace").strip()
+            if line.startswith("{"):
+                try:
+                    return json.loads(line).get("device_id")
+                except json.JSONDecodeError:
+                    return None
+            if line == "":
+                break
+        return None
+
+    def dump(self, save_csv=None, device_id=None):
+        """保存データを取得し CSV に保存する。取得概要(dict, "file"に実ファイル名)を返す。
+        save_csv=None のときは計測開始日時から一意なファイル名を自動生成する。
 
         プロトコル:
           ヘッダ(JSON行) → レコード本体(固定長バイナリ count*rec_size) → フッタ(JSON行)
@@ -96,6 +127,10 @@ class Clogger:
         start_dt = hdr.get("start_dt", 0)
         interval = hdr.get("interval", 0)
         nbytes   = count * rec_size
+
+        # 出力ファイル名: 未指定なら機体ID+計測開始日時から自動命名して上書き衝突を防ぐ
+        if not save_csv:
+            save_csv = auto_filename(start_dt, device_id)
 
         if count == 0:
             print("保存データがありません (0件)。")
@@ -139,14 +174,14 @@ class Clogger:
                     w.writerow([i, ts, tstr, f"{temp/100.0:.2f}",
                                 f"{hum/100.0:.2f}", co2])
                     rows.append((i, tstr, temp / 100.0, hum / 100.0, co2))
-        return {"count": n, "invalid": n_invalid, "rows": rows}
+        return {"count": n, "invalid": n_invalid, "rows": rows, "file": save_csv}
 
 
 def main():
     ap = argparse.ArgumentParser(
         description="c-logger の保存データを読み出して CSV 保存する")
-    ap.add_argument("output", nargs="?", default="clogger_data.csv",
-                    help="出力CSVファイル名 (既定 clogger_data.csv)")
+    ap.add_argument("output", nargs="?", default=None,
+                    help="出力CSVファイル名 (省略時は計測開始日時+IDから自動命名)")
     ap.add_argument("-p", "--port", default=None,
                     help="COMポート (省略時は自動検出)")
     args = ap.parse_args()
@@ -166,9 +201,9 @@ def main():
 
     try:
         print(f"接続: {port}")
-        res = dev.dump(args.output)
+        res = dev.dump(args.output, device_id=dev.get_device_id())
         print(f"{res['count']} 件取得 (欠測 {res['invalid']} 件)")
-        print(f"CSV保存: {args.output}")
+        print(f"CSV保存: {res['file']}")
 
         # 先頭/末尾の数件をプレビュー表示
         rows = res["rows"]

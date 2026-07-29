@@ -81,7 +81,7 @@ extern VelocityCharacteristicCoefficients EM_vcCoefficients;
 extern MeasurementSettings EM_mSettings;
 
 //名称
-extern char EM_mlName[21];
+extern char EM_clName[21];
 
 //EEPROMを読み込む
 void EM_loadEEPROM();

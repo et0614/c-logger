@@ -44,7 +44,7 @@ def find_port():
 class Clogger:
     """c-logger との JSON コマンド通信。request() は ok=false でも dict を返す(自己診断表示のため)。"""
 
-    def __init__(self, port, timeout=3.0):
+    def __init__(self, port, timeout=20.0):  # 無応答個体はI2C/SPIのタイムアウトが積み重なり数秒〜十数秒かかるため長めに
         self.ser = serial.Serial(port, baudrate=115200,
                                  timeout=timeout, write_timeout=timeout)
         time.sleep(0.2)

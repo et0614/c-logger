@@ -118,6 +118,18 @@ static void ph_ping(int32_t id, const char *json,
     reply_ok(id);
 }
 
+// 機体固有IDを返す (読み取り専用, AVRシリコンシリアル由来の8桁hex)。ユーザー変更不可。
+static void ph_get_id(int32_t id, const char *json,
+                      const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b),
+             "{\"id\":%ld,\"ok\":true,\"device_id\":\"%08lX\"}\n",
+             (long)id, (unsigned long)Device_GetID());
+    send_line(b);
+}
+
 // ファームウェア情報を返す
 static void ph_hello(int32_t id, const char *json,
                      const jsmntok_t *t, int ntok, int params)
@@ -420,6 +432,7 @@ typedef struct {
 static const jp_command_t s_commands[] = {
     { "ping",          ph_ping          },
     { "hello",         ph_hello         },
+    { "get_id",        ph_get_id        },
     { "get_battery",   ph_get_battery   },
     { "echo",          ph_echo          },
     { "start_logging", ph_start_logging },
