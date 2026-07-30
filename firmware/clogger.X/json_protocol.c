@@ -137,8 +137,8 @@ static void ph_hello(int32_t id, const char *json,
     (void)json; (void)t; (void)ntok; (void)params;
     char b[JP_REPLY_CAP];
     snprintf(b, sizeof(b),
-             "{\"id\":%ld,\"ok\":true,\"fw\":\"%s\",\"proto\":%d}\n",
-             (long)id, FW_VERSION, (int)PROTOCOL_VERSION);
+             "{\"id\":%ld,\"ok\":true,\"fw\":\"%s\",\"proto\":%d,\"build\":\"%s %s\"}\n",
+             (long)id, FW_VERSION, (int)PROTOCOL_VERSION, FW_BUILD_DATE, FW_BUILD_TIME);
     send_line(b);
 }
 

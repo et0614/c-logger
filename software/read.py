@@ -81,21 +81,30 @@ class Clogger:
         except Exception:
             pass
 
-    def get_device_id(self):
-        """機体固有ID(hex文字列)を取得する。取れなければ None (旧FWなど)。"""
+    def _request(self, command):
+        """コマンドを送り応答(dict)を返す。取れなければ None。"""
         self._id += 1
-        self.ser.write((json.dumps({"id": self._id, "command": "get_id"}) + "\n")
+        self.ser.write((json.dumps({"id": self._id, "command": command}) + "\n")
                        .encode("ascii"))
         for _ in range(5):
             line = self.ser.readline().decode("ascii", errors="replace").strip()
             if line.startswith("{"):
                 try:
-                    return json.loads(line).get("device_id")
+                    return json.loads(line)
                 except json.JSONDecodeError:
                     return None
             if line == "":
                 break
         return None
+
+    def hello(self):
+        """FW情報(fw/proto/build)を取得する。取れなければ None。"""
+        return self._request("hello")
+
+    def get_device_id(self):
+        """機体固有ID(hex文字列)を取得する。取れなければ None (旧FWなど)。"""
+        j = self._request("get_id")
+        return j.get("device_id") if j else None
 
     def dump(self, save_csv=None, device_id=None):
         """保存データを取得し CSV に保存する。取得概要(dict, "file"に実ファイル名)を返す。
@@ -201,6 +210,9 @@ def main():
 
     try:
         print(f"接続: {port}")
+        h = dev.hello()
+        if h:
+            print(f"FW {h.get('fw','?')} / proto {h.get('proto','?')} / build {h.get('build','?')}")
         res = dev.dump(args.output, device_id=dev.get_device_id())
         print(f"{res['count']} 件取得 (欠測 {res['invalid']} 件)")
         print(f"CSV保存: {res['file']}")

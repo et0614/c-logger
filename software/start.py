@@ -117,6 +117,11 @@ def main():
 
     try:
         print(f"接続: {port}")
+        try:
+            h = dev.cmd("hello")
+            print(f"FW {h.get('fw','?')} / proto {h.get('proto','?')} / build {h.get('build','?')}")
+        except Exception:
+            pass
         mv = dev.cmd("get_battery").get("vbat_mV")
         print(f"電池電圧: {mv} mV")
 

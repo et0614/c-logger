@@ -151,6 +151,11 @@ def main():
 
     try:
         print(f"接続: {port}")
+        try:
+            h = dev.request("hello")
+            print(f"FW {h.get('fw','?')} / proto {h.get('proto','?')} / build {h.get('build','?')}")
+        except Exception:
+            pass
         if args.watch is not None:
             run_watch(dev, args.watch)
             return 0
