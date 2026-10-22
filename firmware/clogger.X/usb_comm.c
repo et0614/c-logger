@@ -3,14 +3,43 @@
 
 #include "mcc_generated_files/usb/usb_device.h"                        // USBDevice_Handle
 #include "mcc_generated_files/usb/usb_cdc/usb_cdc_virtual_serial_port.h" // USB_CDCxxx
+#include "mcc_generated_files/usb/usb_cdc/usb_cdc.h"                   // USB_CDCRequestHandler
+#include "mcc_generated_files/usb/usb_common/usb_core_events.h"       // USB_ClassRequestCallbackRegister
+#include "mcc_generated_files/usb/usb_common/usb_core_transfer.h"     // USB_TransferControlDataSet
 #include "mcc_generated_files/timer/delay.h"                          // DELAY_milliseconds
 #include <avr/io.h>                                                   // USB0 / USB_ENABLE_bm / USB_ATTACH_bm
+
+// 【エラッタ対策】SET_LINE_CODING/GET_LINE_CODING を偶数アドレスのバッファで処理する。
+// MCC の usb_cdc.c は通信設定(usbCDCLineCoding, 7バイト)のアライメントを指定していないため、
+// リンク結果によって奇数アドレスに置かれることがある。マルチパケット有効のOUT転送は偶数アドレス
+// 必須 (AVR64DU エラッタ 2.8.1) で、スタックは奇数アドレスを ENDPOINT_ALIGN_ERROR で拒否する。
+// その結果 SET_LINE_CODING のデータ段階が完了せず、PC側でポートを開く処理がタイムアウトする。
+// (K-Logger で発生。c-logger は現状たまたま偶数アドレスだが、コード変更で再発し得るため同じ対策を入れる。
+//  生成コードを直すとMCC再生成で消えるのでここで対処)
+static USB_CDC_LINE_CODING_t s_lineCoding __attribute__((aligned(2))) = {
+    .dwDTERate   = 115200,
+    .bCharFormat = USB_CDC_LINE_CODING_ONE_STOP_BIT,
+    .bParityType = USB_CDC_LINE_CODING_PARITY_NONE,
+    .bDataBits   = USB_CDC_LINE_CODING_8_DATA_BITS,
+};
+
+static RETURN_CODE_t lineCodingRequestHandler(USB_SETUP_REQUEST_t *req)
+{
+    if (USB_REQUEST_RECIPIENT_INTERFACE == (USB_REQUEST_RECIPIENT_t)req->bmRequestType.recipient &&
+        USB_REQUEST_TYPE_CLASS == (USB_REQUEST_TYPE_t)req->bmRequestType.type &&
+        (USB_CDC_REQUEST_SET_LINE_CODING == req->bRequest || USB_CDC_REQUEST_GET_LINE_CODING == req->bRequest))
+    {
+        return USB_TransferControlDataSet((uint8_t *)&s_lineCoding, sizeof(s_lineCoding), NULL);
+    }
+    return USB_CDCRequestHandler(req); // その他(SET_CONTROL_LINE_STATE等)は従来どおり
+}
 
 void USB_Comm_Initialize(void)
 {
     // USB デバイス層 (USBDevice_Initialize) は SYSTEM_Initialize() 済み。
     // ここでは CDC 仮想シリアルポート層のみ初期化する。
     USB_CDCVirtualSerialPortInitialize();
+    USB_ClassRequestCallbackRegister(lineCodingRequestHandler); // CDCの要求処理を上書き登録
 }
 
 void USB_Comm_Task(void)
