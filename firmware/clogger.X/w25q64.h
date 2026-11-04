@@ -4,11 +4,12 @@
  * Created on December 11, 2025
  *
  * Summary:
- * Winbond W25Q64 (64M-bit / 8MB) Flashメモリ制御ドライバ
+ * Winbond W25Q128 (128M-bit / 16MB) Flashメモリ制御ドライバ
+ * (旧基板の W25Q64 から変更。コマンド体系は同じなのでファイル名は w25q64 のまま)
  * SPI通信を用いてセンサデータの保存・読み出しを行う
  * 満杯停止方式 (古いデータは上書きしない) で管理する
  *
- * アドレッシング: W25Q64 は容量 8MB (24bit = 16MB 以内) なので 3バイトアドレスのみ。
+ * アドレッシング: W25Q128 は容量 16MB (24bit でちょうど全域) なので 3バイトアドレスのみ。
  * (W25Q256/512 のような 4バイトアドレスモードは非搭載。standard 3-byte address
  *  コマンド 0x03/0x02/0x20 を使用する。)
  */
@@ -31,9 +32,9 @@ extern "C" {
 #define RECS_PER_PAGE    (PAGE_SIZE / RECORD_SIZE) // 1ページのレコード数 (256/6 = 42 余り 4)
 #define DATA_START_ADDR  4096 // データ領域の開始位置 (最初の4KBは管理領域として飛ばす)
 #define PAGE_SIZE        256  // Flashのページサイズ
-#define FLASH_TOTAL_SIZE 0x800000 // 8MB (W25Q64 の総容量 (Byte))
+#define FLASH_TOTAL_SIZE 0x1000000 // 16MB (W25Q128 の総容量 (Byte))
 #define DATA_AREA_SIZE   (FLASH_TOTAL_SIZE - DATA_START_ADDR) // データ領域の総容量 = 総容量 - 予約領域(4KB)
-#define MAX_RECORD_COUNT ((DATA_AREA_SIZE / PAGE_SIZE) * RECS_PER_PAGE) // 保存可能な最大レコード数 (≒ 1.37M)
+#define MAX_RECORD_COUNT ((DATA_AREA_SIZE / PAGE_SIZE) * RECS_PER_PAGE) // 保存可能な最大レコード数 (≒ 2.75M)
 
 // データ構造体の定義 (6 bytes, packed)
 //
@@ -56,6 +57,8 @@ typedef struct __attribute__((packed)) {
 // index と時刻の対応をズラさない (1区間=1レコードを保つ)。humidity は 0xFFFF(空き判定値)
 // 以外(=0)にして件数にカウントされるようにする。
 #define CO2_INVALID  0xFFFFu
+// CO2なし版(STCC4 非実装)のレコードの co2_ppm。温湿度は有効。
+#define CO2_NONE     0xFFFEu
 
 /**
  * @brief レコード番号をもとにアドレスを出力する
@@ -125,6 +128,17 @@ bool W25_ReadJEDECID(uint8_t id[3]);
  * @return true:一致(書込/読出/消去OK), false:不一致/失敗
  */
 bool W25_SelfTest(void);
+
+/**
+ * @brief Power-down モードにする (待機電流を下げる)。以降は W25_ReleasePowerDown() まで命令を受け付けない。
+ */
+void W25_PowerDown(void);
+
+/**
+ * @brief Power-down から復帰する。Power-down 中でなくても送ってよい。
+ *        MCU をリセットしてもフラッシュは Power-down のままなので、起動時に必ず呼ぶ。
+ */
+void W25_ReleasePowerDown(void);
 
 /**
  * @brief 保存済み(有効)レコードの件数を返す。

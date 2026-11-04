@@ -4,7 +4,7 @@
  * 容量・サイズ系定数 (PAGE_SIZE / FLASH_TOTAL_SIZE / DATA_AREA_SIZE / MAX_RECORD_COUNT)
  * は w25q64.h に集約済み。重複定義は撤去。
  *
- * アドレッシング: W25Q64 は 3バイト(24bit)アドレスのみ。standard コマンド
+ * アドレッシング: W25Q128 は 3バイト(24bit)アドレスのみ。standard コマンド
  * 0x03(Read) / 0x02(Page Program) / 0x20(Sector Erase) を使用する。
  */
 
@@ -12,6 +12,8 @@
 #include "mcc_generated_files/system/system.h"
 #include "mcc_generated_files/spi/spi0.h"
 #include <stddef.h>   // offsetof
+#include "mcc_generated_files/system/clock.h" // F_CPU (_delay_us)
+#include <util/delay.h>
 
 // ==========================================
 // 設定：CSピンのマクロ
@@ -28,6 +30,8 @@
 #define CMD_PAGE_PROGRAM      0x02   // Page Program     (3-byte address)
 #define CMD_READ_DATA         0x03   // Read Data        (3-byte address)
 #define CMD_CHIP_ERASE        0xC7
+#define CMD_POWER_DOWN        0xB9   // Power-down (待機電流 typ 10uA → 1uA)
+#define CMD_RELEASE_PD        0xAB   // Release Power-down
 
 // ==========================================
 // 内部ヘルパー関数 (static)
@@ -93,6 +97,19 @@ static bool W25_WriteData(uint32_t address, uint8_t *data, uint16_t len) {
 // ==========================================
 
 // JEDEC ID (0x9F): id[0]=メーカ, id[1]=メモリタイプ, id[2]=容量。Winbond は id[0]==0xEF。
+void W25_PowerDown(void) {
+    SPI_CS_SetLow();
+    SPI0_ByteExchange(CMD_POWER_DOWN);
+    SPI_CS_SetHigh();
+}
+
+void W25_ReleasePowerDown(void) {
+    SPI_CS_SetLow();
+    SPI0_ByteExchange(CMD_RELEASE_PD);
+    SPI_CS_SetHigh();
+    _delay_us(5); // 復帰時間 tRES1 = 3us
+}
+
 bool W25_ReadJEDECID(uint8_t id[3]) {
     SPI_CS_SetLow();
     SPI0_ByteExchange(0x9F);
@@ -129,7 +146,7 @@ uint32_t W25_GetAddressFromRecordIndex(uint32_t index) {
     return (pageNum * PAGE_SIZE) + (offset * RECORD_SIZE) + DATA_START_ADDR;
 }
 
-// チップ全体消去 (W25Q64 で typ 約 20 秒〜最大 100 秒の blocking)。
+// チップ全体消去 (W25Q128 で typ 約 40 秒〜最大 200 秒の blocking)。
 // 完了まで BUSY (Status Reg1 bit0) を polling し続けるためタイムアウトは設けない。
 // 呼び出し側は実行前に LED 等で「処理中」を示し、終わるまで待つこと。
 void W25_ChipErase(void) {

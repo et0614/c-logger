@@ -28,6 +28,7 @@
 #include "adc0_extension.h" //AD変換拡張 (ADC基準電圧設定)
 #include "eeprom_manager.h" //EEPROM
 #include "usb_comm.h"       //USB-CDC通信 (PCコマンド)
+#include "mcc_generated_files/usb/usb_device.h" // USBDevice_Initialize
 #include "measurement.h"    //温湿度・CO2計測
 
 //標準ヘッダ
@@ -63,6 +64,16 @@ static uint8_t conditioning_wait = 0;
 //start_dt(1レコード目の時刻基準)を確定済みか。コンディショニング完了後の初回計測で確定する。
 static bool start_dt_set = false;
 
+//USBが接続された(UDTC の立ち上がり)。メインループでリセットして USB通信モードで起動し直す。
+static volatile bool s_usb_plugged = false;
+
+//起動時に USB(VBUS)が接続されていたか。false なら USB は止めたまま(電池のみ)。
+static bool s_usb_active = false;
+
+//待機(電池のみ・記録していない)の省電力設定を済ませたか。
+static bool s_standby = false;
+static void enterStandby(void);
+
 // </editor-fold>
 
 // <editor-fold defaultstate="collapsed" desc="main">
@@ -71,8 +82,19 @@ int main(void)
 {
     SYSTEM_Initialize();   // クロック / ピン(LED,RST) / ADC / I2C / SPI / USB / RTC 等
 
-    // SPIモジュールを有効化 (内蔵フラッシュ W25Q64 用)
+    // USB(VBUS)が本当に接続されているかを確かめる。
+    // SYSTEM_Initialize は USB をバスに attach する。attach すると D+ のプルアップ電圧が
+    // ESD保護(USBLC6)のダイオード経由で VBUS に回り込み、電池だけでも UDTC が High(約1.6V)になる。
+    // そこで一度 detach して回り込みが抜けるのを待ってから UDTC を読み、接続時だけ USB を有効に戻す。
+    USB_Comm_Disable();
+    DELAY_milliseconds(200);   // VBUS の放電待ち (VBUS の 1uF と分圧抵抗で時定数 約40ms)
+    s_usb_active = UDTC_GetValue() != 0;
+    if (s_usb_active) USBDevice_Initialize(); // USB を有効化して attach し直す
+
+    // SPIモジュールを有効化 (内蔵フラッシュ W25Q128 用)
     SPI0_Open(SPI0_DEFAULT);
+    // 待機中に Power-down にしたフラッシュは MCU のリセットでは戻らないので、必ず復帰させる
+    W25_ReleasePowerDown();
 
     //EEPROMロード (計測設定・start_dt 等)
     EM_loadEEPROM();
@@ -92,10 +114,13 @@ int main(void)
     // PIT(1秒)割り込みコールバック登録
     RTC_SetPITIsrCallback(oneSecHandler);
 
-    // RSTボタン(PA0)を両エッジ割り込みに設定し、押下/解放へ即時反応させる(LED点灯/消灯)。
-    // プルアップ(PULLUPEN)等のMCC設定は保持し、ISC(割り込みセンス)のみ両エッジに上書きする。
-    PORTA.PIN0CTRL = (PORTA.PIN0CTRL & ~PORT_ISC_gm) | PORT_ISC_BOTHEDGES_gc;
+    // RSTボタン(PD6)の割り込みで、押下/解放へ即時反応させる(LED点灯/消灯)。
+    // プルアップと両エッジ割り込みは MCC で設定済み。
     RST_SetInterruptHandler(rstButtonHandler);
+
+    // USB接続の検出(UDTC=PF2, 両エッジ割り込みは MCC で設定済み。完全非同期ピンなので STANDBY 中でも起床する)。
+    // USB の初期化は起動時だけなので、電池で起動した後に USB を挿したらリセットして起動し直す。
+    UDTC_SetInterruptHandler(udtcHandler);
 
     // ロギング中のSTANDBYスリープでもPITで毎秒起床できるよう RUNSTDBY を有効化。
     // (MCC生成 RTC_Initialize は RUNSTDBY 無効で初期化している)
@@ -112,6 +137,10 @@ int main(void)
     // 10秒以上電圧不足が継続したら終了 (フラッシュ書込み中の電池切れによる破損を防ぐ)
     while (lowBattery_timer <= 10)
     {
+        // USBが挿された: リセットして USB通信モードで起動し直す(記録中なら記録を終える)。
+        // 割り込み内ではなくここで行い、Flash 書込みの途中でリセットしないようにする。
+        if (s_usb_plugged) _PROTECTED_WRITE(RSTCTRL.SWRR, RSTCTRL_SWRST_bm);
+
         //1秒毎の処理 (PITで process_logging_flag が立つ)
         if(process_logging_flag)
         {
@@ -128,8 +157,20 @@ int main(void)
         }
         else
         {
-            // USB通信モード: USBをポーリングしてコマンドを処理する。
-            USB_Comm_Task();
+            if (s_usb_active)
+            {
+                // USB通信モード: USBをポーリングしてコマンドを処理する。
+                USB_Comm_Task();
+            }
+            else
+            {
+                // 待機(電池のみ・記録していない): POWER-DOWN スリープで電池の消耗を抑える。
+                // 起きるのはボタン(PD6: 押している間 LED 点灯)と USB 接続(PF2: リセットして USB通信モードへ)だけ。
+                // どちらも完全非同期ピンなので POWER-DOWN からでも割り込みで起床できる。
+                if (!s_standby) enterStandby();
+                set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+                sleep_mode();
+            }
         }
     }
 
@@ -148,7 +189,23 @@ void oneSecHandler(void)
     process_logging_flag = true;
 }
 
-// RSTボタンのエッジ割り込み (PA0両エッジ)。押下/解放へ即時反応してLEDを点灯/消灯する。
+// 待機に入る前の省電力設定 (1回だけ)。待機から記録や USB 通信に戻るときは必ずリセットを経るので、元に戻す処理は不要。
+static void enterStandby(void)
+{
+    turnOffGreenLED();
+    RTC.PITINTCTRL = 0;               // 毎秒の起床(PIT)を止める。LED の生存表示もしない
+    ADC0.CTRLA &= ~ADC_ENABLE_bm;     // ADC を止める
+    W25_PowerDown();                  // フラッシュを Power-down に (待機電流 typ 10uA → 1uA)
+    s_standby = true;
+}
+
+// UDTC(USB接続検出)のエッジ割り込み。立ち上がり(接続)でフラグを立てる。
+void udtcHandler(void)
+{
+    if (UDTC_GetValue()) s_usb_plugged = true;
+}
+
+// RSTボタンのエッジ割り込み (PD6両エッジ)。押下/解放へ即時反応してLEDを点灯/消灯する。
 // (5秒長押しによるリセット判定は executeSecondlyTask のポーリングで行う)
 void rstButtonHandler(void)
 {
@@ -188,11 +245,14 @@ void executeSecondlyTask(void)
         else           blinkGreenLEDHeartbeat();   // USB通信モード: 2回点滅(省電力)
     }
 
-    // --- 計測トリガ (非ブロッキング, 省電力のためLEDは点滅させない) -------
-    // 計測周期 = interval_co2 秒。区間先頭(sec==0)でトリガし、その次tickで読み出して保存する。
-    // ・トリガ/読み出しを別tickに分けてSTCC4の500ms待ちをスリープ中に消化(USBブロック排除)。
-    // ・読み出しtickも区間内に数えるので、記録間隔は正確に interval_co2 秒(ドリフトしない)。
-    // ・満杯(rec_latest>=MAX)に達したら新規トリガを止める(ループ無し・消費電力も抑制)。
+    // --- 計測 (非ブロッキング, 省電力のためLEDは点滅させない) -------------
+    // 計測周期 = interval_co2 秒。各区間の「末尾 CO2_AVG_WINDOW_SEC 秒」だけ連続 single-shot し、
+    // その CO2 平均を1レコードとして区間境界(sec==0)で保存する。温湿度は平均化せず窓内最後の値。
+    //  ・窓開始(sec==win_start)で Begin、以降の中間tickで Sample、境界で Store のパイプライン。
+    //   → single-shot の500ms待ちは常にスリープ中に消化される(USBブロック無し)。
+    //  ・実効窓 w = min(CO2_AVG_WINDOW_SEC, 間隔)。間隔が窓より短ければ区間全体で平均。
+    //  ・記録の時刻は「区間の終端」に対応する。start_dt は最初の保存時点で確定する。
+    //  ・満杯(rec_latest>=MAX)に達したら計測を止める(ループ無し・消費電力も抑制)。
     static unsigned int sec = 0;
     if (isLogging && EM_mSettings.interval_co2 > 0)
     {
@@ -201,27 +261,34 @@ void executeSecondlyTask(void)
             // コンディショニング中(約22秒)は計測しない。PITスリープで時間を消化し、
             // センサが他コマンドを受け付ける状態に戻るのを待つ。
             conditioning_wait--;
-            sec = 0; // 完了直後の最初のtickで sec==0 → trigger できるように
+            sec = 0; // 完了直後、最初の窓開始から計測を始められるように
         }
-        else
+        else if (rec_latest < MAX_RECORD_COUNT) // 満杯でなければ計測を継続
         {
-            if (Measurement_IsPending()) Measurement_ReadStore(); // 前tickのトリガ分を保存
-            if (rec_latest < MAX_RECORD_COUNT)                    // 満杯でなければ次区間をトリガ
+            uint16_t N = EM_mSettings.interval_co2;
+            uint16_t w = (CO2_AVG_WINDOW_SEC < N) ? CO2_AVG_WINDOW_SEC : N; // 実効窓 = min(窓,間隔)
+            uint16_t win_start = N - w;
+
+            // 区間境界: 前区間の窓を締めて平均を保存する(最初の区間はまだ窓が無いのでpending時のみ)。
+            if (sec == 0 && Measurement_IsPending())
             {
-                if (sec == 0)
+                if (!start_dt_set)
                 {
-                    if (!start_dt_set)
-                    {
-                        // 1レコード目の時刻基準を「実際に計測を始める今」で確定する。
-                        // (コンディショニングの約22秒だけ start_logging 時刻から後ろにずれる)
-                        EM_mSettings.start_dt = g_epoch;
-                        EM_saveMeasurementSetting();
-                        start_dt_set = true;
-                    }
-                    Measurement_Trigger();
+                    // 1レコード目の時刻基準を「最初の保存(=区間終端)の今」で確定する。
+                    // 以降の各レコード時刻は start_dt + index*interval で復元される。
+                    EM_mSettings.start_dt = g_epoch;
+                    EM_saveMeasurementSetting();
+                    start_dt_set = true;
                 }
-                if (++sec >= EM_mSettings.interval_co2) sec = 0;
+                Measurement_AvgStore();
             }
+
+            // 窓の開始/中間: 連続 single-shot で CO2 を積算する。
+            if (sec == win_start)      Measurement_AvgBegin();  // 窓開始(リセット+トリガ)
+            else if (sec > win_start)  Measurement_AvgSample();  // 窓中間(読み+積算, 次トリガ)
+            // sec < win_start はスリープのみ(計測しない=省電力)
+
+            if (++sec >= N) sec = 0;
         }
     }
     else
@@ -266,13 +333,13 @@ bool getLoggingActive(void)
 void Clock_Set(uint32_t epoch) { g_epoch = epoch; }
 uint32_t Clock_Get(void)       { return g_epoch; }
 
-// 電池電圧計測 (PD3 = ADC0 AIN3 に VBAT が直接接続されている前提)
+// 電池電圧計測 (PF5 = ADC0 AIN21 に VBAT が直接接続されている前提)
 // 基準電圧は VDD (3.3V regulated)、8 sample 積算で精度確保。戻り値: VBAT [mV]
 uint16_t getBatteryVoltage_mV(void)
 {
     ADC0_SetReferenceVoltage(ADC_VREF_VDD);
     ADC0_SampleRepeatCountSet(ADC_8_SAMPLES_ACCUMULATED);
-    ADC0_ChannelSelect(ADC0_CHANNEL_AIN3);
+    ADC0_ChannelSelect(VBAT);
     ADC0_ConversionStart();
     while(!ADC0_IsConversionDone());
     adc_accumulate_t acc_val = ADC0_AccumulatedResultGet();
@@ -291,6 +358,8 @@ uint16_t getBatteryVoltage_mV(void)
 // 「膝」の手前(2.0V)で止めることで、末尾のゴミデータと書込み破損を回避する。
 bool isLowBattery(void)
 {
+    // USB給電中(UDTC=High)は電池を見ない。電池が無くても動き、そのとき VBAT は 0V になるため。
+    if (UDTC_GetValue()) return false;
     return getBatteryVoltage_mV() < 2000;
 }
 
@@ -316,6 +385,12 @@ void showError(short int errNum)
     while(true)
     {
         blinkGreenLED(1);
-        DELAY_milliseconds(3000);
+        // 待つ間に USB が接続されたら(UDTC=High)リセットして USB通信モードで起動し直す。
+        // USB給電なら電池を見ないので、電池不足でも PC から状態確認やデータ回収ができる。
+        for (uint8_t i = 0; i < 30; i++)
+        {
+            if (UDTC_GetValue()) _PROTECTED_WRITE(RSTCTRL.SWRR, RSTCTRL_SWRST_bm);
+            DELAY_milliseconds(100);
+        }
     }
 }

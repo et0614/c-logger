@@ -15,7 +15,8 @@ USB接続したまま、温湿度センサ・CO2センサ(STCC4)・フラッシ�
 依存: pip install pyserial
 
 対応 firmware コマンド:
-    selftest -> {"flash":{ok,rw,jedec}, "stcc4":{connected}, "sensor":{ok,co2_ppm,temp_C,hum_pct}}
+    selftest -> {"flash":{ok,rw,jedec}, "co2":bool, "sensor_i2c":bool, "sensor":{ok,co2_ppm,temp_C,hum_pct}}
+                (co2=false は CO2なし版: STCC4 非実装で SHT4x を直接読む。co2_ppm は null)
     measure  -> {"co2_ppm","temp_C","hum_pct"}
 """
 import sys
@@ -83,29 +84,32 @@ def _mark(ok):
 def run_selftest(dev):
     j = dev.request("selftest")
     flash = j.get("flash", {})
-    stcc4 = j.get("stcc4", {})
+    has_co2 = bool(j.get("co2"))
+    sensor_i2c = j.get("sensor_i2c")
     sensor = j.get("sensor", {})
 
     print("==== セルフテスト結果 ====")
     print(f"  [{_mark(flash.get('ok') and flash.get('rw'))}] フラッシュ  "
           f"JEDEC={flash.get('jedec')}  (id={flash.get('ok')} / write-read-verify={flash.get('rw')})")
-    print(f"  [{_mark(stcc4.get('connected'))}] STCC4(CO2)  I2C接続={stcc4.get('connected')}")
+    print(f"  版: {'CO2あり (STCC4)' if has_co2 else 'CO2なし (SHT4x 直結)'}")
+    print(f"  [{_mark(sensor_i2c)}] センサ      I2C接続={sensor_i2c}  ({'STCC4 0x64' if has_co2 else 'SHT4x 0x44'})")
     s_ok = sensor.get("ok")
     if s_ok:
         print(f"  [{_mark(True)}] 計測        "
-              f"CO2={sensor.get('co2_ppm')}ppm  T={sensor.get('temp_C')}C  RH={sensor.get('hum_pct')}%")
+              + (f"CO2={sensor.get('co2_ppm')}ppm  " if has_co2 else "")
+              + f"T={sensor.get('temp_C')}C  RH={sensor.get('hum_pct')}%")
     else:
         print(f"  [{_mark(False)}] 計測        失敗 (STCC4/SHT4x 応答なし or CRCエラー)")
 
     ok = bool(j.get("ok"))
     print(f"\n総合判定: {'PASS ✅' if ok else 'FAIL ❌'}")
     # 参考コメント
-    if s_ok and sensor.get("co2_ppm") in (390, 391, 389):
+    if has_co2 and s_ok and sensor.get("co2_ppm") in (390, 391, 389):
         print("  注: CO2が~390ppmは電源投入直後のbypass位相の可能性(最初の2回)。数回 measure してください。")
     if not (flash.get('ok') and flash.get('rw')):
         print("  → フラッシュNG: SPI配線/CS/はんだ、電源を確認。")
-    if not stcc4.get('connected'):
-        print("  → STCC4未応答: I2C配線(SDA/SCL)/電源/アドレス(0x64)を確認。")
+    if not sensor_i2c:
+        print("  → センサ未応答: I2C配線(SDA/SCL)/電源/はんだ、CO2なし版は R7・R8(0Ω)を確認。")
     return ok
 
 

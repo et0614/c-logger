@@ -29,6 +29,7 @@ void showError(short int errNum);
 void oneSecHandler(void);
 
 void rstButtonHandler(void);
+void udtcHandler(void);
 
 void executeSecondlyTask(void);
 

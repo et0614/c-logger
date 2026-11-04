@@ -1,0 +1,524 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+C-Logger GUI ツール (tkinter, 画面表示は英語)
+
+clogger.py の CLogger クラス(USB-CDC / JSONプロトコル)を使い、以下を1画面で行う。
+  - 機器情報の表示 (FW, 機体ID, 電池電圧, 保存件数, センサ構成)
+  - 記録開始 (データ消去 + 時刻合わせ + 記録間隔)
+  - データ読み出し (CSV)、データ消去
+  - 温湿度 (CO2) のリアルタイム表示
+  - 自己診断
+
+通信はすべてワーカースレッドで行い、結果はキュー経由でUIスレッドに渡す (tkinterはUIスレッド専用)。
+機器へのアクセスは Device.lock で直列化する (リアルタイム表示中に他の操作をしても衝突しない)。
+
+実行: python clogger_gui.py   (依存: pyserial)
+exe化: build_exe.bat (PyInstaller)
+"""
+import queue
+import threading
+import time
+from datetime import datetime
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+
+import serial
+from serial.tools import list_ports
+
+import clogger as cl
+
+APP_TITLE = "C-Logger"
+LIVE_INTERVAL_S = 1.0          # リアルタイム表示の測定間隔
+INTERVAL_MAX_S = 3600          # 記録間隔の上限
+AUTO_PORT = "Auto"
+
+
+def fmt_time(epoch):
+    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+
+
+class Device:
+    """CLogger をスレッド間で共有するための入れ物 (操作は lock で直列化)"""
+
+    def __init__(self):
+        self.dev = None
+        self.port = None
+        self.lock = threading.Lock()
+
+    @property
+    def connected(self):
+        return self.dev is not None
+
+    def open(self, port):
+        dev = cl.CLogger(port)
+        try:
+            h = dev.request("hello")
+        except Exception:
+            dev.close()
+            raise
+        if h.get("device") != cl.DEVICE_NAME:
+            dev.close()
+            raise RuntimeError(f"{port} is not a C-Logger (or its firmware is older than 3.0.0)")
+        with self.lock:
+            self.dev, self.port = dev, port
+
+    def close(self):
+        with self.lock:
+            if self.dev:
+                self.dev.close()
+            self.dev, self.port = None, None
+
+    def call(self, fn):
+        """fn(CLogger) を排他実行する"""
+        with self.lock:
+            if self.dev is None:
+                raise RuntimeError("not connected")
+            return fn(self.dev)
+
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(APP_TITLE)
+        self.minsize(600, 480)
+        self.device = Device()
+        self.q = queue.Queue()
+        self.busy = False
+        self.info = {}
+        self.live_on = False
+        self.live_thread = None
+
+        self._build_ui()
+        self._set_connected(False)
+        self.after(50, self._poll_queue)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(200, self._refresh_ports)
+
+    # ------------------------------------------------------------------
+    # UI 構築
+    # ------------------------------------------------------------------
+    def _build_ui(self):
+        pad = {"padx": 6, "pady": 3}
+
+        # 接続
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=8, pady=(8, 4))
+        ttk.Label(top, text="Port:").pack(side="left")
+        self.port_var = tk.StringVar(value=AUTO_PORT)
+        self.port_combo = ttk.Combobox(top, textvariable=self.port_var, width=12, state="readonly")
+        self.port_combo.pack(side="left", padx=4)
+        ttk.Button(top, text="↻", width=3, command=self._refresh_ports).pack(side="left")
+        self.connect_btn = ttk.Button(top, text="Connect", command=self._on_connect)
+        self.connect_btn.pack(side="left", padx=6)
+        self.refresh_btn = ttk.Button(top, text="Refresh", command=self._refresh_info)
+        self.refresh_btn.pack(side="left")
+        self.device_buttons = [self.refresh_btn]  # 接続中だけ有効にするボタン (各タブで追加)
+
+        # 機器情報
+        box = ttk.LabelFrame(self, text="Device")
+        box.pack(fill="x", padx=8, pady=4)
+        self.info_vars = {}
+        fields = [("device", "Device"), ("id", "Device ID"), ("battery", "Battery"),
+                  ("records", "Stored records"), ("period", "Recorded period"), ("sensor", "Sensors")]
+        for i, (key, label) in enumerate(fields):
+            r, c = divmod(i, 2)
+            ttk.Label(box, text=label + ":").grid(row=r, column=c * 2, sticky="w", **pad)
+            v = tk.StringVar(value="-")
+            ttk.Label(box, textvariable=v).grid(row=r, column=c * 2 + 1, sticky="w", **pad)
+            self.info_vars[key] = v
+        box.columnconfigure(1, weight=1)
+        box.columnconfigure(3, weight=1)
+
+        # タブ
+        self.nb = ttk.Notebook(self)
+        self.nb.pack(fill="both", expand=True, padx=8, pady=4)
+        self._build_logging_tab()
+        self._build_data_tab()
+        self._build_live_tab()
+        self._build_diag_tab()
+
+        # ステータスバー
+        bar = ttk.Frame(self)
+        bar.pack(fill="x", padx=8, pady=(0, 8))
+        self.status_var = tk.StringVar(value="Not connected.")
+        ttk.Label(bar, textvariable=self.status_var).pack(side="left")
+        self.progress = ttk.Progressbar(bar, length=180, mode="determinate")
+        self.progress.pack(side="right")
+
+    def _build_logging_tab(self):
+        f = ttk.Frame(self.nb, padding=10)
+        self.nb.add(f, text="Logging")
+        ttk.Label(f, text="Recording interval (s):").grid(row=0, column=0, sticky="w")
+        self.interval_var = tk.IntVar(value=60)
+        sp = ttk.Spinbox(f, from_=1, to=INTERVAL_MAX_S, width=6, textvariable=self.interval_var,
+                         command=self._update_capacity)
+        sp.grid(row=0, column=1, sticky="w", padx=6)
+        sp.bind("<KeyRelease>", lambda e: self._update_capacity())
+        self.capacity_var = tk.StringVar()
+        ttk.Label(f, textvariable=self.capacity_var, foreground="gray").grid(row=1, column=0, columnspan=3,
+                                                                           sticky="w", pady=(2, 10))
+        self.start_btn = ttk.Button(f, text="Start logging…", command=self._on_start_logging)
+        self.start_btn.grid(row=2, column=0, sticky="w")
+        ttk.Label(f, wraplength=540, justify="left", text=(
+            "Starting erases all stored data and synchronizes the device clock to this PC.\n"
+            "After starting, the C-Logger disconnects from USB and keeps logging on its coin cell (CR2032). "
+            "To stop logging, unplug and plug it into USB again (data is kept) "
+            "or hold the button for 5 seconds.")).grid(row=3, column=0, columnspan=3, sticky="w", pady=10)
+        self.device_buttons.append(self.start_btn)
+        self._update_capacity()
+
+    def _build_data_tab(self):
+        f = ttk.Frame(self.nb, padding=10)
+        self.nb.add(f, text="Data")
+        self.save_btn = ttk.Button(f, text="Save as CSV…", command=self._on_save_csv)
+        self.save_btn.grid(row=0, column=0, sticky="w")
+        ttk.Label(f, wraplength=540, justify="left", foreground="gray", text=(
+            "CSV columns: index, epoch, datetime, temp_C, hum_pct, co2_ppm\n"
+            "Failed measurements have empty values. co2_ppm is empty on the model without a CO2 sensor."
+        )).grid(row=1, column=0, sticky="w", pady=10)
+        ttk.Separator(f).grid(row=2, column=0, sticky="ew", pady=10)
+        self.erase_btn = ttk.Button(f, text="Erase all data…", command=self._on_erase)
+        self.erase_btn.grid(row=3, column=0, sticky="w")
+        f.columnconfigure(0, weight=1)
+        self.device_buttons += [self.save_btn, self.erase_btn]
+
+    def _build_live_tab(self):
+        f = ttk.Frame(self.nb, padding=10)
+        self.nb.add(f, text="Live view")
+        self.live_btn = ttk.Button(f, text="Start", command=self._toggle_live)
+        self.live_btn.grid(row=0, column=0, sticky="w")
+        big = ("Segoe UI", 30, "bold")
+        self.live_temp = tk.StringVar(value="--.-- °C")
+        self.live_hum = tk.StringVar(value="--.-- %RH")
+        self.live_co2 = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.live_temp, font=big).grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(f, textvariable=self.live_hum, font=big).grid(row=2, column=0, sticky="w")
+        ttk.Label(f, textvariable=self.live_co2, font=big).grid(row=3, column=0, sticky="w")
+        ttk.Label(f, wraplength=540, justify="left", foreground="gray", text=(
+            "Readings are not saved. Right after connecting, the sensor may read high "
+            "because the board is warmed by USB power.")).grid(row=4, column=0, sticky="w", pady=10)
+        self.device_buttons.append(self.live_btn)
+
+    def _build_diag_tab(self):
+        f = ttk.Frame(self.nb, padding=10)
+        self.nb.add(f, text="Diagnostics")
+        self.selftest_btn = ttk.Button(f, text="Run self-test", command=self._on_selftest)
+        self.selftest_btn.grid(row=0, column=0, sticky="w")
+        self.selftest_var = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.selftest_var, font=("Consolas", 10), justify="left").grid(
+            row=1, column=0, sticky="w", pady=6)
+        self.device_buttons.append(self.selftest_btn)
+
+    # ------------------------------------------------------------------
+    # 非同期実行
+    # ------------------------------------------------------------------
+    def _run(self, text, work, done=None, progress_mode=None):
+        """work() をワーカースレッドで実行し、結果を done(result) に渡す (UIスレッド)"""
+        if self.busy:
+            return
+        self.busy = True
+        self._update_buttons()
+        self.status_var.set(text)
+        if progress_mode == "indeterminate":
+            self.progress.configure(mode="indeterminate")
+            self.progress.start(15)
+
+        def worker():
+            try:
+                r = work()
+                self.q.put(("done", done, r))
+            except Exception as e:  # noqa: BLE001 (UIに表示する)
+                self.q.put(("error", None, e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _poll_queue(self):
+        try:
+            while True:
+                kind, cb, payload = self.q.get_nowait()
+                if kind == "live":
+                    self._on_live_result(payload)
+                elif kind == "live_error":
+                    self._stop_live()
+                    self._handle_error(payload)
+                elif kind == "progress":
+                    n, total = payload
+                    self.progress.configure(mode="determinate", maximum=max(total, 1), value=n)
+                    self.status_var.set(f"Downloading… {n:,} / {total:,}")
+                else:
+                    self._task_finished()
+                    if kind == "done":
+                        if cb:
+                            cb(payload)
+                    else:
+                        self._handle_error(payload)
+        except queue.Empty:
+            pass
+        self.after(50, self._poll_queue)
+
+    def _task_finished(self):
+        self.busy = False
+        self.progress.stop()
+        self.progress.configure(mode="determinate", value=0)
+        self._update_buttons()
+
+    def _handle_error(self, e):
+        # ポートが消えた(USBを抜いた)などの通信異常は切断扱いにする
+        if isinstance(e, (serial.SerialException, OSError)) or "no response" in str(e):
+            self._disconnect(f"Connection lost: {e}")
+            messagebox.showerror(APP_TITLE, f"Connection lost.\n\n{e}")
+        else:
+            self.status_var.set(f"Error: {e}")
+            messagebox.showerror(APP_TITLE, str(e))
+
+    # ------------------------------------------------------------------
+    # 接続
+    # ------------------------------------------------------------------
+    def _refresh_ports(self):
+        ports = [p.device for p in list_ports.comports() if p.vid == cl.USB_VID and p.pid == cl.USB_PID]
+        self.port_combo["values"] = [AUTO_PORT] + ports
+        if self.port_var.get() not in self.port_combo["values"]:
+            self.port_var.set(AUTO_PORT)
+
+    def _on_connect(self):
+        if self.device.connected:
+            self._disconnect("Disconnected.")
+            return
+        port = self.port_var.get()
+
+        def work():
+            p = cl.find_port() if port == AUTO_PORT else port
+            if p is None:
+                raise RuntimeError("C-Logger not found. Check the USB connection.\n"
+                                   "(A C-Logger that is logging does not respond. Re-plug it to stop logging.)")
+            self.device.open(p)
+            try:
+                return self._read_info()
+            except Exception:
+                self.device.close()
+                raise
+
+        self._run("Connecting…", work, self._on_info, "indeterminate")
+
+    def _disconnect(self, msg):
+        self._stop_live()
+        self.device.close()
+        self._set_connected(False)
+        self.status_var.set(msg)
+
+    def _set_connected(self, on):
+        self.connect_btn.configure(text="Disconnect" if on else "Connect")
+        self.port_combo.configure(state="disabled" if on else "readonly")
+        if not on:
+            for v in self.info_vars.values():
+                v.set("-")
+            self.info = {}
+        self._update_buttons()
+
+    def _update_buttons(self):
+        st = "normal" if (self.device.connected and not self.busy) else "disabled"
+        for b in self.device_buttons:
+            b.configure(state=st)
+        # リアルタイム表示の停止はいつでもできるように
+        if self.live_on:
+            self.live_btn.configure(state="normal")
+        self.connect_btn.configure(state="disabled" if self.busy else "normal")
+
+    # ------------------------------------------------------------------
+    # 機器情報
+    # ------------------------------------------------------------------
+    def _read_info(self):
+        def f(d):
+            return {"hello": d.request("hello"), "id": d.request("get_id").get("device_id"),
+                    "status": d.request("get_status"), "battery": d.request("get_battery"),
+                    "measure": d.request("measure")}  # センサ構成(CO2あり/なし)の判定に使う
+        return self.device.call(f)
+
+    def _refresh_info(self):
+        self._run("Reading device information…", self._read_info, self._on_info)
+
+    def _on_info(self, info):
+        self.info = info
+        self._set_connected(True)
+        h, s = info["hello"], info["status"]
+        self.info_vars["device"].set(f"{h.get('device')}  FW {h.get('fw')}  ({self.device.port})")
+        self.info_vars["id"].set(info["id"])
+        self.info_vars["battery"].set(f"{info['battery']['vbat_mV'] / 1000:.2f} V")
+        cap_days = s["capacity"] * s["interval"] / 86400
+        self.info_vars["records"].set(f"{s['count']:,} / {s['capacity']:,}  ({cap_days:,.0f} days at {s['interval']} s)")
+        if s["count"] > 0:
+            end = s["start_dt"] + (s["count"] - 1) * s["interval"]
+            self.info_vars["period"].set(f"{fmt_time(s['start_dt'])} – {fmt_time(end)}")
+        else:
+            self.info_vars["period"].set("(no data)")
+        has_co2 = info["measure"].get("co2_ppm") is not None
+        self.info_vars["sensor"].set("CO2, temperature, humidity" if has_co2 else "Temperature, humidity")
+        self.interval_var.set(s["interval"])
+        self._update_capacity()
+        self.status_var.set(f"Connected to {self.device.port}.")
+
+    def _update_capacity(self):
+        try:
+            sec = int(self.interval_var.get())
+        except (tk.TclError, ValueError):
+            self.capacity_var.set("")
+            return
+        cap = self.info.get("status", {}).get("capacity", 2751840)
+        self.capacity_var.set(f"Memory lasts about {cap * sec / 86400:,.0f} days at this interval.")
+
+    # ------------------------------------------------------------------
+    # 記録
+    # ------------------------------------------------------------------
+    def _on_start_logging(self):
+        try:
+            sec = int(self.interval_var.get())
+        except (tk.TclError, ValueError):
+            sec = 0
+        if not 1 <= sec <= INTERVAL_MAX_S:
+            messagebox.showwarning(APP_TITLE, f"Recording interval must be 1–{INTERVAL_MAX_S} seconds.")
+            return
+        n = self.info.get("status", {}).get("count", 0)
+        msg = f"Start logging every {sec} s?\n\nThe device clock is set to this PC's time."
+        if n > 0:
+            msg += f"\n\n{n:,} stored records will be ERASED. Save them first if needed."
+        if not messagebox.askyesno(APP_TITLE, msg, icon="warning" if n else "question"):
+            return
+        self._stop_live()
+
+        def work():
+            def f(d):
+                d.request("clear_memory", wait_s=300.0)
+                d.request("set_interval", {"sec": sec})
+                now = int(time.time())
+                d.request("set_time", {"epoch": now})
+                d.request("start_logging")
+                return now
+            return self.device.call(f)
+
+        def done(now):
+            self._disconnect(f"Logging started at {fmt_time(now)}.")
+            messagebox.showinfo(APP_TITLE, (
+                f"Logging started at {fmt_time(now)} (every {sec} s).\n\n"
+                "The C-Logger has disconnected from USB. You can unplug it now.\n"
+                "To stop logging, plug it into USB again or hold the button for 5 seconds."))
+
+        self._run("Erasing memory and starting logging (may take a few minutes)…", work, done, "indeterminate")
+
+    # ------------------------------------------------------------------
+    # データ
+    # ------------------------------------------------------------------
+    def _on_save_csv(self):
+        s = self.info.get("status", {})
+        if s.get("count", 0) == 0:
+            messagebox.showinfo(APP_TITLE, "No stored data.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save CSV", defaultextension=".csv", filetypes=[("CSV", "*.csv")],
+            initialfile=cl.default_csv_name(self.info.get("id", ""), s.get("start_dt", 0)))
+        if not path:
+            return
+        self._stop_live()
+
+        def work():
+            start_dt, interval, recs = self.device.call(
+                lambda d: d.download(lambda n, total: self.q.put(("progress", None, (n, total)))))
+            cl.write_csv(path, start_dt, interval, recs)
+            return len(recs), cl.count_failed(recs)
+
+        def done(r):
+            n, nfail = r
+            self.status_var.set(f"Saved {n:,} records.")
+            messagebox.showinfo(APP_TITLE, f"Saved {n:,} records ({nfail:,} failed measurements) to\n{path}")
+
+        self._run("Downloading…", work, done)
+
+    def _on_erase(self):
+        n = self.info.get("status", {}).get("count", 0)
+        if not messagebox.askyesno(APP_TITLE, f"Erase all {n:,} stored records?\nThis cannot be undone.",
+                                   icon="warning"):
+            return
+        self._run("Erasing memory (may take a few minutes)…",
+                  lambda: self.device.call(lambda d: d.request("clear_memory", wait_s=300.0)),
+                  lambda r: self._refresh_info(), "indeterminate")
+
+    # ------------------------------------------------------------------
+    # リアルタイム表示
+    # ------------------------------------------------------------------
+    def _toggle_live(self):
+        if self.live_on:
+            self._stop_live()
+        else:
+            self._start_live()
+
+    def _start_live(self):
+        if not self.device.connected or self.live_on:
+            return
+        self.live_on = True
+        self.live_btn.configure(text="Stop")
+
+        def loop():
+            while self.live_on and self.device.connected:
+                try:
+                    r = self.device.call(lambda d: d.request("measure"))
+                    self.q.put(("live", None, r))
+                except Exception as e:  # noqa: BLE001
+                    if self.live_on:
+                        self.q.put(("live_error", None, e))
+                    return
+                time.sleep(LIVE_INTERVAL_S)
+
+        self.live_thread = threading.Thread(target=loop, daemon=True)
+        self.live_thread.start()
+        self._update_buttons()
+
+    def _stop_live(self):
+        self.live_on = False
+        self.live_btn.configure(text="Start")
+        self._update_buttons()
+
+    def _on_live_result(self, r):
+        if not self.live_on:
+            return
+        self.live_temp.set(f"{r['temp_C']:6.2f} °C")
+        self.live_hum.set(f"{r['hum_pct']:6.2f} %RH")
+        co2 = r.get("co2_ppm")
+        self.live_co2.set("" if co2 is None else f"{co2:5d} ppm")
+
+    # ------------------------------------------------------------------
+    # 自己診断
+    # ------------------------------------------------------------------
+    def _on_selftest(self):
+        def done(r):
+            ok = lambda b: "OK" if b else "NG"  # noqa: E731
+            fl, se = r["flash"], r["sensor"]
+            meas = cl.fmt_measure(se) if se["ok"] else "-"
+            self.selftest_var.set(
+                f"Flash   : {ok(fl['ok'] and fl['rw'])}  (JEDEC {fl['jedec']}, read/write {ok(fl['rw'])})\n"
+                f"Model   : {'with CO2 sensor' if r.get('co2') else 'temperature/humidity only'}\n"
+                f"Sensor  : {ok(r.get('sensor_i2c'))}\n"
+                f"Measure : {ok(se['ok'])}  ({meas})\n"
+                f"Overall : {ok(r['ok'])}")
+            self.status_var.set(f"Self-test: {ok(r['ok'])}")
+
+        self._stop_live()
+        self._run("Running self-test…", lambda: self.device.call(
+            lambda d: d.request("selftest", wait_s=10.0)), done, "indeterminate")
+
+    # ------------------------------------------------------------------
+    def _on_close(self):
+        self.live_on = False
+        try:
+            self.device.close()
+        finally:
+            self.destroy()
+
+
+def main():
+    app = App()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

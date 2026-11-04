@@ -162,6 +162,7 @@ def do_dump(dev, save_csv=None):
     # 復元 (little-endian: int16 temp, uint16 hum, uint16 co2)
     # co2 == 0xFFFF(=CO2_INVALID) は欠測(計測失敗)レコード。
     CO2_INVALID = 0xFFFF
+    CO2_NONE = 0xFFFE  # CO2なし版(温湿度のみ)
     n = len(raw) // rec_size
     rows = []
     n_invalid = 0
@@ -172,7 +173,7 @@ def do_dump(dev, save_csv=None):
             n_invalid += 1
             rows.append((i, ts, None, None, None))  # 欠測
         else:
-            rows.append((i, ts, temp / 100.0, hum / 100.0, co2))
+            rows.append((i, ts, temp / 100.0, hum / 100.0, None if co2 == CO2_NONE else co2))
 
     for r in rows[:5]:
         print(_fmt_row(r))
@@ -245,6 +246,7 @@ def _read_range(dev, start, count, read_timeout=2.0, idle_limit=3):
 
 def _decode_rows(raw, rec_size, start_dt, interval, base_index=0):
     CO2_INVALID = 0xFFFF
+    CO2_NONE = 0xFFFE  # CO2なし版(温湿度のみ)
     n = len(raw) // rec_size
     rows = []
     n_invalid = 0
@@ -256,7 +258,7 @@ def _decode_rows(raw, rec_size, start_dt, interval, base_index=0):
             n_invalid += 1
             rows.append((idx, ts, None, None, None))
         else:
-            rows.append((idx, ts, temp / 100.0, hum / 100.0, co2))
+            rows.append((idx, ts, temp / 100.0, hum / 100.0, None if co2 == CO2_NONE else co2))
     return rows, n_invalid
 
 
@@ -265,7 +267,8 @@ def _fmt_row(r):
     tstr = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
     if t is None:
         return f"  [{i}] {tstr}  (欠測 / invalid)"
-    return f"  [{i}] {tstr}  temp={t:.2f}C hum={h:.2f}% co2={c}ppm"
+    co2 = "" if c is None else f" co2={c}ppm"  # CO2なし版は表示しない
+    return f"  [{i}] {tstr}  temp={t:.2f}C hum={h:.2f}%{co2}"
 
 
 def do_peek(dev, start, count):

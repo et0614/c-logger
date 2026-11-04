@@ -37,6 +37,11 @@ bool Measurement_StartConditioning(void);
 /// コンディショニング完了までの待ち秒数 (datasheet 22秒 + 余裕)。
 #define MEASUREMENT_CONDITIONING_SEC  24
 
+/// CO2 平均化の窓 [秒]。各区間の「末尾この秒数」を連続計測し、その CO2 平均を1レコードとして記録する。
+/// 例: 60秒間隔なら 55〜60秒の5サンプルを平均。区間が窓より短い場合は区間全体で平均する(実効窓=min(窓,間隔))。
+/// 温湿度は平均化せず、窓内の最後の有効サンプル値を用いる。将来変更する可能性があるため定数で持つ。
+#define CO2_AVG_WINDOW_SEC  5
+
 /// CO2センサ(STCC4)を工場出荷状態にリセットする (センサ内部の校正値等が初期化される)。
 /// ソフトリセットで idle にしてから実行する。約100msブロックする。
 /// 注意: これはセンサのリセットであり、ロガーのFlashデータ/EEPROM設定は消さない。
@@ -48,8 +53,11 @@ bool Measurement_FactoryReset(void);
 /// live計測/セルフテストの前に呼ぶ。2回目以降は何もしない(ソフトリセットのbypass位相を避ける)。
 void Measurement_EnsureSensor(void);
 
-/// STCC4がI2Cバス上に存在するか (ACK確認)。セルフテスト用。@return true:応答あり
+/// 計測に使うセンサ(CO2あり版は STCC4、CO2なし版は SHT4x)がI2Cバス上に存在するか (ACK確認)。セルフテスト用。
 bool Measurement_SensorConnected(void);
+
+/// CO2センサ(STCC4)を実装しているか (初期化時に判定)。false なら CO2なし版で、co2_ppm は CO2_NONE。
+bool Measurement_HasCO2(void);
 
 /// ライブ計測 (Flashに保存しない): STCC4を(必要なら)初期化し single-shot で1回計測して out に詰める。
 /// USB接続のままセンサ動作確認/外気校正確認に使う。内部で約500msブロックする。
@@ -79,6 +87,23 @@ bool Measurement_IsPending(void);
 /// トリガから500ms以上経過してから呼ぶこと。pending でなければ何もしない。
 /// @return true:保存成功, false:未トリガ/計測失敗/Flash満杯
 bool Measurement_ReadStore(void);
+
+// ====== CO2 5秒平均計測 (区間末尾の連続計測 → 平均を1レコードに) ======
+// 使い方(PIT 1秒周期): 窓開始tickで Begin → 以降の中間tickで Sample を毎tick →
+// 区間境界tickで Store。各tickは前tickのトリガ分を読み出し、次の single-shot をトリガする
+// パイプライン構成なので、500ms待ちは常にスリープ中に消化される。
+
+/// CO2平均化の窓を開始する: アキュムレータをクリアし最初の single-shot をトリガする(即 return)。
+void Measurement_AvgBegin(void);
+
+/// 窓の中間tick: 前tickのトリガ結果を読んで CO2 を積算し(温湿度は最後の値を保持)、
+/// 次の single-shot をトリガする(即 return)。
+void Measurement_AvgSample(void);
+
+/// 窓末尾(区間境界): 最後のトリガ結果を読んで積算し、CO2 平均を計算して Flash に保存する。
+/// 温湿度は窓内最後の有効サンプル値を使う。窓内に有効サンプルが無ければ欠測レコードを書く。
+/// @return true:保存成功, false:Flash満杯 or 書込み失敗
+bool Measurement_AvgStore(void);
 
 /// 保存済みデータを消去する (メモリ初期化)。使用済みセクタ(4KB単位)を物理消去し、
 /// rec_latest を 0 に戻す。空き判定(humidity==0xFFFF)が正しく働くよう物理消去する。

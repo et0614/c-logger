@@ -137,7 +137,7 @@ static void ph_hello(int32_t id, const char *json,
     (void)json; (void)t; (void)ntok; (void)params;
     char b[JP_REPLY_CAP];
     snprintf(b, sizeof(b),
-             "{\"id\":%ld,\"ok\":true,\"fw\":\"%s\",\"proto\":%d,\"build\":\"%s %s\"}\n",
+             "{\"id\":%ld,\"ok\":true,\"device\":\"C-Logger\",\"fw\":\"%s\",\"proto\":%d,\"build\":\"%s %s\"}\n",
              (long)id, FW_VERSION, (int)PROTOCOL_VERSION, FW_BUILD_DATE, FW_BUILD_TIME);
     send_line(b);
 }
@@ -252,11 +252,12 @@ static void ph_get_status(int32_t id, const char *json,
     char b[192];
     snprintf(b, sizeof(b),
         "{\"id\":%ld,\"ok\":true,\"logging\":%s,\"interval\":%u,"
-        "\"count\":%lu,\"epoch\":%lu,\"start_dt\":%lu}\n",
+        "\"count\":%lu,\"capacity\":%lu,\"epoch\":%lu,\"start_dt\":%lu}\n",
         (long)id,
         getLoggingActive() ? "true" : "false",
         (unsigned)EM_mSettings.interval_co2,
         (unsigned long)W25_Count_Record(),
+        (unsigned long)MAX_RECORD_COUNT,
         (unsigned long)Clock_Get(),
         (unsigned long)EM_mSettings.start_dt);
     send_line(b);
@@ -272,15 +273,19 @@ static void ph_measure(int32_t id, const char *json,
     if (!Measurement_LiveSample(&rec)) { reply_error(id, "measure_failed"); return; }
     int16_t tc = rec.temperature;                 // ℃*100
     int th = tc / 100, tl = tc % 100; if (tl < 0) tl = -tl;
+    char co2s[8]; // CO2なし版は null
+    if (rec.co2_ppm == CO2_NONE) snprintf(co2s, sizeof(co2s), "null");
+    else                         snprintf(co2s, sizeof(co2s), "%u", (unsigned)rec.co2_ppm);
     char b[JP_REPLY_CAP];
     snprintf(b, sizeof(b),
-        "{\"id\":%ld,\"ok\":true,\"co2_ppm\":%u,\"temp_C\":%d.%02d,\"hum_pct\":%u.%02u}\n",
-        (long)id, (unsigned)rec.co2_ppm, th, tl,
+        "{\"id\":%ld,\"ok\":true,\"co2_ppm\":%s,\"temp_C\":%d.%02d,\"hum_pct\":%u.%02u}\n",
+        (long)id, co2s, th, tl,
         (unsigned)(rec.humidity / 100), (unsigned)(rec.humidity % 100));
     send_line(b);
 }
 
-// セルフテスト: フラッシュ(JEDEC ID + write/read/verify) / STCC4(I2C ACK) / ライブ計測 を一括診断。
+// セルフテスト: フラッシュ(JEDEC ID + write/read/verify) / センサ(I2C ACK) / ライブ計測 を一括診断。
+// センサは CO2あり版なら STCC4、CO2なし版なら SHT4x。"co2" で版を返す。
 static void ph_selftest(int32_t id, const char *json,
                         const jsmntok_t *t, int ntok, int params)
 {
@@ -289,7 +294,9 @@ static void ph_selftest(int32_t id, const char *json,
     uint8_t fid[3] = { 0, 0, 0 };
     bool flash_id = W25_ReadJEDECID(fid);
     bool flash_rw = W25_SelfTest();
-    bool stcc4_ok = Measurement_SensorConnected();
+    Measurement_EnsureSensor(); // CO2あり/なしの判定を済ませる
+    bool has_co2   = Measurement_HasCO2();
+    bool sensor_ok = Measurement_SensorConnected();
 
     SensorData_t rec;
     bool meas_ok = Measurement_LiveSample(&rec);
@@ -300,19 +307,22 @@ static void ph_selftest(int32_t id, const char *json,
         th = tc / 100; tl = tc % 100; if (tl < 0) tl = -tl;
         hh = rec.humidity / 100; hl = rec.humidity % 100; co2 = rec.co2_ppm;
     }
-    bool all_ok = flash_id && flash_rw && stcc4_ok && meas_ok;
+    bool all_ok = flash_id && flash_rw && sensor_ok && meas_ok;
+    char co2s[8]; // CO2なし版は null
+    if (!has_co2) snprintf(co2s, sizeof(co2s), "null");
+    else          snprintf(co2s, sizeof(co2s), "%u", co2);
 
     char b[256];
     snprintf(b, sizeof(b),
         "{\"id\":%ld,\"ok\":%s,"
         "\"flash\":{\"ok\":%s,\"rw\":%s,\"jedec\":\"%02X%02X%02X\"},"
-        "\"stcc4\":{\"connected\":%s},"
-        "\"sensor\":{\"ok\":%s,\"co2_ppm\":%u,\"temp_C\":%d.%02d,\"hum_pct\":%u.%02u}}\n",
+        "\"co2\":%s,\"sensor_i2c\":%s,"
+        "\"sensor\":{\"ok\":%s,\"co2_ppm\":%s,\"temp_C\":%d.%02d,\"hum_pct\":%u.%02u}}\n",
         (long)id, all_ok ? "true" : "false",
         flash_id ? "true" : "false", flash_rw ? "true" : "false",
         fid[0], fid[1], fid[2],
-        stcc4_ok ? "true" : "false",
-        meas_ok ? "true" : "false", co2, th, tl, hh, hl);
+        has_co2 ? "true" : "false", sensor_ok ? "true" : "false",
+        meas_ok ? "true" : "false", co2s, th, tl, hh, hl);
     send_line(b);
 }
 

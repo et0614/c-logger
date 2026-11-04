@@ -40,6 +40,8 @@ CLOGGER_PID = 0x0B15
 
 # 計測失敗(欠測)マーカー (firmware w25q64.h の CO2_INVALID と一致)
 CO2_INVALID = 0xFFFF
+# CO2なし版(STCC4 非実装)の co2_ppm (firmware w25q64.h の CO2_NONE と一致)。温湿度は有効
+CO2_NONE = 0xFFFE
 
 
 def find_port():
@@ -180,9 +182,10 @@ class Clogger:
                     w.writerow([i, ts, tstr, "", "", ""])
                     rows.append((i, tstr, None, None, None))
                 else:
+                    co2v = None if co2 == CO2_NONE else co2  # CO2なし版は空欄
                     w.writerow([i, ts, tstr, f"{temp/100.0:.2f}",
-                                f"{hum/100.0:.2f}", co2])
-                    rows.append((i, tstr, temp / 100.0, hum / 100.0, co2))
+                                f"{hum/100.0:.2f}", "" if co2v is None else co2v])
+                    rows.append((i, tstr, temp / 100.0, hum / 100.0, co2v))
         return {"count": n, "invalid": n_invalid, "rows": rows, "file": save_csv}
 
 
@@ -224,7 +227,8 @@ def main():
             i, tstr, t, h, c = r
             if t is None:
                 return f"  [{i}] {tstr}  (欠測)"
-            return f"  [{i}] {tstr}  {t:.2f}C {h:.2f}% {c}ppm"
+            co2 = "" if c is None else f" {c}ppm"  # CO2なし版は表示しない
+            return f"  [{i}] {tstr}  {t:.2f}C {h:.2f}%{co2}"
 
         for r in rows[:3]:
             print(fmt(r))
