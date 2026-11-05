@@ -457,3 +457,5 @@ firmware/bootloader/hex/clogger_combined.hex
 software/avrdude.exe
 software/avrdude.conf
 software/*.spec
+# 配布するファームウェア (上の [Rr]elease/ の除外から外す)
+!firmware/release/

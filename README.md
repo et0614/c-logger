@@ -38,7 +38,13 @@ software/               PCツール: clogger_gui.py (GUI)、clogger.py (コマ�
 ## バージョン
 
 - 基板: 3.0（シルク表記「Version 3.0」）。修正ごとに 3.1, 3.2 … と上げる。履歴は `hardware/fab/README.md`
-- ファームウェア: 3.1.0（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
+- ファームウェア: 3.2.0（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
+
+## 配布 (GitHub Releases)
+
+`firmware/release/clogger.hex` に配布するファームウェアを置いてコミットし、`v1`, `v2` … のタグを push すると、
+GitHub Actions が `CLogger_vX.Y.Z.zip`（CLogger.exe（avrdude 同梱）、ファームウェア、avrdude のライセンス、README）を作って Releases に登録する。
+手順は [firmware/release/README.md](firmware/release/README.md)。手元で作るなら `python software/make_release.py --avrdude <avrdude のフォルダ>`。
 
 ## PCツールの exe 化
 
@@ -72,3 +78,4 @@ software/               PCツール: clogger_gui.py (GUI)、clogger.py (コマ�
 - **USB 接続の検出**: 電池で動いているときに USB を attach すると、D+ のプルアップ電圧が ESD 保護 (USBLC6) のダイオード経由で VBUS に回り込み、UDTC が High に見える。起動時に一度 detach してから UDTC を読み、USB が本当に接続されているときだけ USB を有効にする。
 - **CO2あり/なしの判定**: 起動後の初回計測時に STCC4 (0x64) の応答で判定する。CO2なし版は R7・R8 (0Ω) で SHT40 (0x44) をホストの I2C に直結し、直接読む。記録の co2_ppm は 0xFFFE。
 - **待機**: 電池のみで記録していないときは POWER-DOWN スリープ。フラッシュも Power-down にする（起動時に必ず復帰命令を送る）。起床はボタン (PD6) と USB 接続 (UDTC) のみ。
+- **記録中のフラッシュ**: 書き込むときだけ Power-down から起こし、書き込みが終わったら Power-down に戻す（待機電流 typ 10uA → 1uA）。

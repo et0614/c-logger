@@ -324,6 +324,8 @@ void setLoggingActive(bool on)
         // (executeSecondlyTask で start_dt_set を見て EEPROM 保存する)
         start_dt_set = false;
     }
+    // 記録中はフラッシュを書き込みの合間に Power-down にする (止めるときは起こす)
+    Measurement_SetFlashSleep(on);
     isLogging = on;
 }
 

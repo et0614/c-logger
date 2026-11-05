@@ -17,6 +17,9 @@ static bool s_pending = false;
 // STCC4を初期化済みか (USB通信モードでの live計測/セルフテスト用)。
 static bool s_sensor_inited = false;
 
+// 記録中か (= フラッシュを書き込みの合間に Power-down にするか)。Measurement_SetFlashSleep で切り替える。
+static bool s_flash_sleep = false;
+
 // CO2センサ(STCC4)を実装しているか。初期化時に I2C の応答で判定する。
 // CO2なし版は STCC4 を実装せず、R7・R8(0Ω)で温湿度センサ(SHT40)をホストのI2Cに直結する。
 static bool s_has_co2 = true;
@@ -79,6 +82,23 @@ static void initSensor(void)
     DELAY_milliseconds(10);
     s_has_co2 = STCC4_isConnected();
     s_sensor_inited = true; // 初期化済みとして記録
+}
+
+void Measurement_SetFlashSleep(bool on)
+{
+    s_flash_sleep = on;
+    if (on) W25_PowerDown();
+    else    W25_ReleasePowerDown();
+}
+
+// 1レコードを書き込む。記録中は書き込みの間だけフラッシュを起こし、終わったら Power-down に戻す
+// (W25_WriteRecord は書き込み完了を待ってから戻るので、直後の Power-down は受け付けられる)。
+static bool writeRecord(uint32_t index, SensorData_t *rec)
+{
+    if (s_flash_sleep) W25_ReleasePowerDown();
+    bool ok = W25_WriteRecord(index, rec);
+    if (s_flash_sleep) W25_PowerDown();
+    return ok;
 }
 
 void Measurement_Initialize(void)
@@ -163,7 +183,7 @@ bool Measurement_Record(void)
 
     SensorData_t rec;
     if (!Measurement_Sample(&rec)) return false;
-    if (!W25_WriteRecord(rec_latest, &rec)) return false;
+    if (!writeRecord(rec_latest, &rec)) return false;
 
     rec_latest++;
     return true;
@@ -223,7 +243,7 @@ bool Measurement_ReadStore(void)
         rec.co2_ppm     = CO2_INVALID; // 欠測マーカー
     }
 
-    if (!W25_WriteRecord(rec_latest, &rec)) return false;
+    if (!writeRecord(rec_latest, &rec)) return false;
     rec_latest++;
     return true;
 }
@@ -291,7 +311,7 @@ bool Measurement_AvgStore(void)
         rec.co2_ppm     = CO2_INVALID;
     }
 
-    if (!W25_WriteRecord(rec_latest, &rec)) return false;
+    if (!writeRecord(rec_latest, &rec)) return false;
     rec_latest++;
     return true;
 }

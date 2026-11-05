@@ -24,6 +24,10 @@ extern "C" {
 /// 起動時に W25_Count_Record() で Flash から復元する。dump / 件数取得でも参照する。
 extern uint32_t rec_latest;
 
+/// 記録中の省電力: on でフラッシュを Power-down にし、以降はレコードを書く間だけ起こす。
+/// off でフラッシュを起こす (USB通信モードで読み出す前)。待機電流 typ 10uA → 1uA。
+void Measurement_SetFlashSleep(bool on);
+
 /// センサ初期化 + rec_latest を Flash から復元する。
 /// SYSTEM_Initialize() / SPI0_Open() の後に1回呼ぶこと。
 void Measurement_Initialize(void);

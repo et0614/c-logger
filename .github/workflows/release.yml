@@ -1,0 +1,82 @@
+# 配布用 zip (CLogger_vX.Y.Z.zip) を作って GitHub Releases に登録する。
+#
+# v1, v2 ... のタグを push すると実行される:
+#   git tag v1
+#   git push origin v1
+#
+# 配布するファームウェアは、タグを付ける前に firmware/release/clogger.hex に置いてコミットしておくこと
+# (version.h の FW_VERSION と同じ版のビルドでないと失敗する)。
+# Actions の画面から手動で実行した場合は、Releases には登録せず、zip を artifact として残す。
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  AVRDUDE_VERSION: '8.1'
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python packages
+        run: python -m pip install pyserial pyinstaller
+
+      - name: Download avrdude
+        shell: pwsh
+        run: |
+          $url = "https://github.com/avrdudes/avrdude/releases/download/v$env:AVRDUDE_VERSION/avrdude-v$env:AVRDUDE_VERSION-windows-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile avrdude.zip
+          Expand-Archive avrdude.zip -DestinationPath avrdude
+          $exe = Get-ChildItem avrdude -Recurse -Filter avrdude.exe | Select-Object -First 1
+          "AVRDUDE_DIR=$($exe.DirectoryName)" >> $env:GITHUB_ENV
+
+      - name: Build zip
+        id: build
+        shell: pwsh
+        run: |
+          python software/make_release.py --avrdude "$env:AVRDUDE_DIR" -o CLogger.zip
+          $fw = (Select-String -Path firmware/clogger.X/version.h -Pattern 'FW_VERSION\s+"([^"]+)"').Matches[0].Groups[1].Value
+          "fw=$fw" >> $env:GITHUB_OUTPUT
+          Rename-Item CLogger.zip "CLogger_v$fw.zip"
+          Copy-Item firmware/release/clogger.hex "clogger_firmware_$fw.hex"
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $fw = "${{ steps.build.outputs.fw }}"
+          $notes = @"
+          C-Logger ツール / C-Logger tools
+
+          - CLogger.exe (PC tool, avrdude $env:AVRDUDE_VERSION bundled for the firmware update)
+          - Firmware $fw
+
+          取扱説明書 / Manual (Japanese): https://github.com/et0614/c-logger/blob/main/docs/manual.md
+          "@
+          gh release create "${{ github.ref_name }}" "CLogger_v$fw.zip" "clogger_firmware_$fw.hex" --title "C-Logger ${{ github.ref_name }} (firmware $fw)" --notes $notes
+
+      - name: Keep zip as artifact (manual run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: CLogger
+          path: |
+            CLogger_v*.zip
+            clogger_firmware_*.hex
