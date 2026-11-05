@@ -29,6 +29,7 @@
 #include "eeprom_manager.h" //EEPROM
 #include "usb_comm.h"       //USB-CDC通信 (PCコマンド)
 #include "mcc_generated_files/usb/usb_device.h" // USBDevice_Initialize
+#include "mcc_generated_files/usb/usb_common/usb_core_events.h" // USB_SuspendCallbackRegister
 #include "measurement.h"    //温湿度・CO2計測
 
 //標準ヘッダ
@@ -43,6 +44,7 @@
 
 //1秒毎の処理実行フラグ (PIT割り込みで立つ)
 volatile bool process_logging_flag = false;
+static volatile bool process_usb_sec = false;  // USB通信モードの1秒ごとの処理 (PIT で立つ)
 
 //電池不足継続タイマ[sec]
 static uint8_t lowBattery_timer = 0;
@@ -73,6 +75,11 @@ static bool s_usb_active = false;
 //待機(電池のみ・記録していない)の省電力設定を済ませたか。
 static bool s_standby = false;
 static void enterStandby(void);
+
+// USB が抜かれたかもしれない (USB の Suspend か UDTC の立ち下がり)。メインループで確かめる
+static volatile bool s_usb_check = false;
+static void usbSuspendHandler(void);
+static void checkUsbUnplugged(void);
 
 // </editor-fold>
 
@@ -136,6 +143,7 @@ int main(void)
 
     // USB仮想シリアル通信の初期化 (CDC層。USBデバイス層はSYSTEM_Initializeで初期化済み)
     USB_Comm_Initialize();
+    USB_SuspendCallbackRegister(usbSuspendHandler);
 
     // 10秒以上電圧不足が継続したら終了 (フラッシュ書込み中の電池切れによる破損を防ぐ)
     while (lowBattery_timer <= 10)
@@ -164,6 +172,23 @@ int main(void)
             {
                 // USB通信モード: USBをポーリングしてコマンドを処理する。
                 USB_Comm_Task();
+
+                // USB が抜かれたら待機に戻る。抜いても D+ のプルアップが VBUS に回り込んで UDTC が
+                // High のままになることがあるので、UDTC の立ち下がりだけでは分からない。
+                // 抜けた疑いがあるとき (エニュメレーション後の Suspend / UDTC の立ち下がり /
+                // エニュメレーションされないまま10秒) に、起動時と同じ方法で確かめる。
+                static uint8_t unconfigured_sec = 0;
+                if (process_usb_sec)
+                {
+                    process_usb_sec = false;
+                    if (USB0.ADDR == 0) { if (++unconfigured_sec >= 10) { unconfigured_sec = 0; s_usb_check = true; } }
+                    else unconfigured_sec = 0;
+                }
+                if (s_usb_check)
+                {
+                    s_usb_check = false;
+                    checkUsbUnplugged();
+                }
             }
             else
             {
@@ -190,6 +215,7 @@ int main(void)
 void oneSecHandler(void)
 {
     process_logging_flag = true;
+    process_usb_sec = true;
 }
 
 // 待機に入る前の省電力設定 (1回だけ)。待機から記録や USB 通信に戻るときは必ずリセットを経るので、元に戻す処理は不要。
@@ -206,6 +232,27 @@ static void enterStandby(void)
 void udtcHandler(void)
 {
     if (UDTC_GetValue()) s_usb_plugged = true;
+    else if (s_usb_active) s_usb_check = true;   // 立ち下がり: 抜かれた
+}
+
+// USB の Suspend (バスが 3ms 以上無通信)。抜かれたときと、PC のスリープなどで起きる。
+// エニュメレーション前 (アドレス未設定) の Suspend は無視する (未接続中の判定は10秒ごとに行う)。
+static void usbSuspendHandler(void)
+{
+    if (USB0.ADDR != 0) s_usb_check = true;
+}
+
+// USB がまだ接続されているかを確かめる。detach して VBUS への回り込みが抜けるのを待ってから UDTC を読む。
+// 抜けていればリセットして起動し直す (電池のみの起動になり、待機の POWER-DOWN に入る)。
+// つながっていれば (PC のスリープなど) attach し直す。
+static void checkUsbUnplugged(void)
+{
+    USB_Comm_Disable();
+    DELAY_milliseconds(200);
+    if (!UDTC_GetValue()) _PROTECTED_WRITE(RSTCTRL.SWRR, RSTCTRL_SWRST_bm);
+    USBDevice_Initialize();
+    USB_Comm_Initialize();
+    USB_SuspendCallbackRegister(usbSuspendHandler);
 }
 
 // RSTボタンのエッジ割り込み (PD6両エッジ)。押下/解放へ即時反応してLEDを点灯/消灯する。

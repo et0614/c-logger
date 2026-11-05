@@ -77,5 +77,5 @@ GitHub Actions が `CLogger_vX.Y.Z.zip`（CLogger.exe（avrdude 同梱）、フ�
 - **USB**: AVR64DU のエラッタ 2.8.1（マルチパケット OUT 転送は偶数アドレス必須）を `usb_comm.c` で回避している（K-Logger と同じ）。
 - **USB 接続の検出**: 電池で動いているときに USB を attach すると、D+ のプルアップ電圧が ESD 保護 (USBLC6) のダイオード経由で VBUS に回り込み、UDTC が High に見える。起動時に一度 detach してから UDTC を読み、USB が本当に接続されているときだけ USB を有効にする。
 - **CO2あり/なしの判定**: 起動後の初回計測時に STCC4 (0x64) の応答で判定する。CO2なし版は R7・R8 (0Ω) で SHT40 (0x44) をホストの I2C に直結し、直接読む。記録の co2_ppm は 0xFFFE。
-- **待機**: 電池のみで記録していないときは POWER-DOWN スリープ。フラッシュも Power-down にする（起動時に必ず復帰命令を送る）。起床はボタン (PD6) と USB 接続 (UDTC) のみ。
+- **待機**: 電池のみで記録していないときは POWER-DOWN スリープ。フラッシュも Power-down にする（起動時に必ず復帰命令を送る）。起床はボタン (PD6) と USB 接続 (UDTC) のみ。USB を抜くと（エニュメレーション後の Suspend、UDTC の立ち下がり、または未エニュメレーションのまま10秒）、起動時と同じく detach してから UDTC を確かめ、外れていればリセットして待機に戻る。
 - **記録中のフラッシュ**: 書き込むときだけ Power-down から起こし、書き込みが終わったら Power-down に戻す（待機電流 typ 10uA → 1uA）。

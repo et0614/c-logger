@@ -1,7 +1,7 @@
 #ifndef VERSION_H
 #define VERSION_H
 
-#define FW_VERSION       "3.2.0"   // 手動更新のセマンティックバージョン(機能追加/リリース時に上げる)
+#define FW_VERSION       "3.2.1"   // 手動更新のセマンティックバージョン(機能追加/リリース時に上げる)
 #define PROTOCOL_VERSION 1         // JSONプロトコル世代(互換性が壊れる変更で上げる)
 
 // ビルド日時 (コンパイル時に自動設定。「いつ時点のファームか」の判別用)。
