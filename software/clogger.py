@@ -13,6 +13,10 @@ USB接続した C-Logger の状態確認・記録開始・データ読み出し�
     python clogger.py measure [-n 回数]       温湿度(CO2)を連続表示 (保存しない, Ctrl+Cで終了)
     python clogger.py selftest                フラッシュ/センサの自己診断
     python clogger.py clear                   保存データの消去
+    python clogger.py clock                   時計の補正値を表示
+    python clogger.py clock -m 60 [--apply]   時計のずれを60分測る (--apply で補正値を書き込む)
+    python clogger.py clock --set N           時計の補正値を N ppm にする (0 で補正なし)
+    python clogger.py update firmware.hex     USB でファームウェアを更新 (ブートローダで起動しておく。avrdude が必要)
     (GUI版: python clogger_gui.py)
     共通オプション: -p COM3 (ポート指定。省略時は自動検出)
 
@@ -153,6 +157,131 @@ class CLogger:
             recs += part
         return hdr["start_dt"], hdr["interval"], recs
 
+    def _epoch_transition(self, timeout=3.0):
+        """機器の時計(epoch)が1秒進む瞬間の PC 時刻を推定する。@return (新しいepoch, PC時刻)"""
+        def poll():
+            t0 = time.time()
+            e = int(self.request("get_status")["epoch"])
+            return e, (t0 + time.time()) / 2
+        e0, t_prev = poll()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            e, t = poll()
+            if e != e0:
+                return e, (t_prev + t) / 2  # 変化前の最後の読みと変化後の最初の読みの中間
+            t_prev = t
+        raise RuntimeError("clock does not advance (is the device logging?)")
+
+    def measure_drift(self, duration_s, step_s=10.0, progress=None, stop=None):
+        """機器の時計のずれ [ppm] を測る (正=機器の時計が速い)。
+        step_s ごとに「時計が1秒進む瞬間」の PC 時刻を記録し、直線を当てはめて傾きを求める。
+        PC の時計を基準にするので、PC を時刻同期しておくこと。
+        @param progress progress(経過秒, 全体秒, ppm or None) を随時呼ぶ
+        @param stop     stop() が True を返したら打ち切る
+        @return (ppm, 標準誤差ppm, 点数, 測定秒)"""
+        pts = []
+        t_start = time.time()
+        while True:
+            pts.append(self._epoch_transition())
+            elapsed = pts[-1][1] - pts[0][1]
+            ppm = _fit_ppm(pts)[0] if len(pts) >= 3 else None
+            if progress:
+                progress(elapsed, duration_s, ppm)
+            if time.time() - t_start >= duration_s or (stop and stop()):
+                break
+            time.sleep(max(0.0, step_s - 1.2))
+        if len(pts) < 3:
+            raise RuntimeError("measurement too short")
+        ppm, err = _fit_ppm(pts)
+        return ppm, err, len(pts), pts[-1][1] - pts[0][1]
+
+
+def _fit_ppm(pts):
+    """(epoch, PC時刻) の列に epoch = a + b·t を当てはめ、ずれ (b−1)×1e6 [ppm] と標準誤差を返す"""
+    n = len(pts)
+    ts = [t - pts[0][1] for _, t in pts]
+    es = [e - pts[0][0] for e, _ in pts]
+    mt, me = sum(ts) / n, sum(es) / n
+    sxx = sum((t - mt) ** 2 for t in ts)
+    b = sum((t - mt) * (e - me) for t, e in zip(ts, es)) / sxx
+    a = me - b * mt
+    if n > 2:
+        res = sum((e - (a + b * t)) ** 2 for t, e in zip(ts, es)) / (n - 2)
+        err = (res / sxx) ** 0.5 * 1e6
+    else:
+        err = float("nan")
+    return (b - 1.0) * 1e6, err
+
+
+# ============================================================
+# ファームウェア更新 (USB ブートローダ euboot + avrdude)
+# ============================================================
+
+BOOTLOADER_VIDPID = "04d8:0b12"   # euboot (firmware/bootloader) の USB VID:PID
+APP_START = 0x0A00                # ブートローダの後ろ (BOOTSIZE=0x05 × 512B)
+FLASH_END = 0x10000               # AVR64DU32 のフラッシュ 64KB
+
+
+def find_avrdude(extra_dirs=()):
+    """avrdude の実行ファイルを探す: 指定フォルダ → このツール(exe)と同じフォルダ → PATH。無ければ None"""
+    import os
+    import shutil
+    names = ["avrdude.exe", "avrdude"]
+    dirs = list(extra_dirs)
+    dirs.append(os.path.dirname(os.path.abspath(sys.argv[0])))
+    dirs.append(os.path.dirname(os.path.abspath(__file__)))
+    if getattr(sys, "_MEIPASS", None):     # PyInstaller で同梱した場合
+        dirs.append(sys._MEIPASS)
+    for d in dirs:
+        for n in names:
+            p = os.path.join(d, n)
+            if os.path.isfile(p):
+                return p
+    return shutil.which("avrdude")
+
+
+def check_app_hex(path):
+    """書き込む hex を確認する。ブートローダ領域 (0x0000-0x09FF) に触れる hex は書き込まない
+    (ブートローダの後ろに置くリンカ設定が無いビルド)。@return (先頭アドレス, 末尾アドレス, バイト数)"""
+    upper, addrs = 0, []
+    for raw in open(path, encoding="ascii", errors="replace"):
+        line = raw.strip()
+        if not line.startswith(":"):
+            continue
+        n, a, t = int(line[1:3], 16), int(line[3:7], 16), int(line[7:9], 16)
+        if t == 0:
+            base = (upper << 16) | a
+            if base < FLASH_END:             # フラッシュ (ヒューズ等の 0x8xxxxx は含めない)
+                addrs += [base, base + n - 1]
+        elif t == 4:
+            upper = int(line[9:13], 16)
+        elif t == 1:
+            break
+    if not addrs:
+        raise RuntimeError("the file has no program data")
+    lo, hi = min(addrs), max(addrs)
+    if lo < APP_START:
+        raise RuntimeError(f"the file starts at 0x{lo:04X}, inside the bootloader area (0x0000-0x09FF). "
+                           "Build the firmware with -Wl,--defsym=__TEXT_REGION_ORIGIN__=0xA00")
+    return lo, hi, hi - lo + 1
+
+
+def update_firmware(hex_path, avrdude, output=print):
+    """ブートローダ動作中の C-Logger に hex を書き込む。-D (自動消去しない) でブートローダを残す。
+    @param output avrdude の出力を1行ずつ渡す
+    @return avrdude の終了コード (0 = 成功)"""
+    import subprocess
+    check_app_hex(hex_path)
+    cmd = [avrdude, f"-Pusb:{BOOTLOADER_VIDPID}", "-cjtag3updi", "-pavr64du32", "-D",
+           f"-Uflash:w:{hex_path}:i"]
+    output(" ".join(cmd))
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         errors="replace", creationflags=flags)
+    for line in p.stdout:
+        output(line.rstrip())
+    return p.wait()
+
 
 def write_csv(path, start_dt, interval, recs):
     """CSV (index, epoch, datetime, temp_C, hum_pct, co2_ppm) を書く"""
@@ -279,6 +408,51 @@ def cmd_clear(dev, args):
     print("消去しました。")
 
 
+def cmd_clock(dev, args):
+    cur = dev.request("get_clock_calib")["ppm"]
+    if args.set is not None:
+        r = dev.request("set_clock_calib", {"ppm": args.set})
+        print(f"時計の補正値: {cur} → {r['ppm']} ppm (機器に保存しました)")
+        return
+    print(f"時計の補正値: {cur} ppm (正=水晶が速いので遅らせている)")
+    if not args.measure:
+        return
+    print(f"時計のずれを {args.measure} 分測ります (PC の時刻を基準にします。PC を時刻同期しておくこと)。Ctrl+C で打ち切り")
+
+    def progress(el, total, ppm):
+        est = "-" if ppm is None else f"{ppm:+.1f} ppm"
+        print(f"\r  {el / 60:5.1f} / {total / 60:.0f} 分  現在の推定 {est}   ", end="", flush=True)
+    stopped = []
+    try:
+        ppm, err, n, sec = dev.measure_drift(args.measure * 60, progress=progress, stop=lambda: bool(stopped))
+    except KeyboardInterrupt:
+        print("\n打ち切りました。")
+        return
+    print()
+    new = max(-127, min(127, round(cur + ppm)))
+    print(f"ずれ: {ppm:+.2f} ppm (±{err:.2f}, {n} 点, {sec / 60:.1f} 分)  1日あたり {ppm * 0.0864:+.2f} 秒")
+    print(f"推奨の補正値: {new} ppm (現在 {cur} + ずれ {ppm:+.1f})")
+    if args.apply:
+        dev.request("set_clock_calib", {"ppm": new})
+        print("補正値を機器に保存しました。")
+    else:
+        print(f"書き込むには: python clogger.py clock --set {new}")
+
+
+def cmd_update(args):
+    avr = args.avrdude or find_avrdude()
+    if not avr:
+        print("avrdude が見つかりません。avrdude.exe をこのツールと同じフォルダに置くか、--avrdude で指定してください。")
+        return 1
+    lo, hi, n = check_app_hex(args.hex)
+    print(f"{args.hex}: 0x{lo:04X}〜0x{hi:04X} ({n:,} バイト)")
+    print("C-Logger をブートローダで起動しておくこと: 電池と USB を外し、ボタンを押したまま USB をつなぐ。")
+    rc = update_firmware(args.hex, avr)
+    print("書き込みました。USB を抜き差しすると新しいファームウェアで起動します。" if rc == 0
+          else f"失敗しました (avrdude 終了コード {rc})。")
+    return rc
+
+
 def main():
     ap = argparse.ArgumentParser(description="C-Logger PCツール")
     ap.add_argument("-p", "--port", help="COMポート (省略時は自動検出)")
@@ -294,7 +468,21 @@ def main():
     p.add_argument("-w", "--wait", type=float, default=1.0, help="測定間隔 [秒]")
     sub.add_parser("selftest", help="自己診断")
     sub.add_parser("clear", help="保存データの消去")
+    p = sub.add_parser("clock", help="時計の補正値の表示・ずれの測定・補正値の設定")
+    p.add_argument("-m", "--measure", type=float, help="ずれを測る時間 [分] (目安 60)")
+    p.add_argument("--apply", action="store_true", help="測定結果から補正値を書き込む")
+    p.add_argument("--set", type=int, help="補正値 [ppm] を直接設定 (-127〜127)")
+    p = sub.add_parser("update", help="USB でファームウェアを更新 (ブートローダで起動しておく)")
+    p.add_argument("hex", help="ファームウェアの hex (clogger.X.production.hex)")
+    p.add_argument("--avrdude", help="avrdude の実行ファイル (省略時は自動で探す)")
     args = ap.parse_args()
+
+    if args.cmd == "update":
+        try:
+            return cmd_update(args)
+        except RuntimeError as e:
+            print(f"エラー: {e}")
+            return 1
 
     port = args.port or find_port()
     if port is None:
@@ -307,7 +495,7 @@ def main():
         return 1
 
     handlers = {"info": cmd_info, "start": cmd_start, "read": cmd_read,
-                "measure": cmd_measure, "selftest": cmd_selftest, "clear": cmd_clear}
+                "measure": cmd_measure, "selftest": cmd_selftest, "clear": cmd_clear, "clock": cmd_clock}
     try:
         handlers[args.cmd](dev, args)
     except RuntimeError as e:

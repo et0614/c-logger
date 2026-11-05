@@ -137,7 +137,9 @@ class App(tk.Tk):
         self._build_logging_tab()
         self._build_data_tab()
         self._build_live_tab()
+        self._build_clock_tab()
         self._build_diag_tab()
+        self._build_firmware_tab()
 
         # ステータスバー
         bar = ttk.Frame(self)
@@ -201,6 +203,44 @@ class App(tk.Tk):
             "because the board is warmed by USB power.")).grid(row=4, column=0, sticky="w", pady=10)
         self.device_buttons.append(self.live_btn)
 
+    def _build_clock_tab(self):
+        f = ttk.Frame(self.nb, padding=10)
+        self.nb.add(f, text="Clock")
+        ttk.Label(f, wraplength=540, justify="left", text=(
+            "The device clock runs on a 32.768 kHz crystal, which may drift by up to about ±20 ppm "
+            "(±1.7 s/day). Measure the drift against this PC's clock and store a correction in the device.\n"
+            "Synchronize the PC clock with an internet time server first, and keep the room temperature steady.")
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        self.clock_cur = tk.StringVar(value="Current correction: -")
+        ttk.Label(f, textvariable=self.clock_cur).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        row = ttk.Frame(f)
+        row.grid(row=2, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Label(row, text="Measuring time (min):").pack(side="left")
+        self.clock_min = tk.StringVar(value="60")
+        ttk.Combobox(row, textvariable=self.clock_min, values=["10", "30", "60", "120"], width=5,
+                     state="readonly").pack(side="left", padx=6)
+        self.clock_btn = ttk.Button(row, text="Measure", command=self._on_clock_measure)
+        self.clock_btn.pack(side="left", padx=6)
+        self.clock_stop_btn = ttk.Button(row, text="Stop", command=self._on_clock_stop, state="disabled")
+        self.clock_stop_btn.pack(side="left")
+        self.clock_result = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.clock_result, font=("Consolas", 10), justify="left").grid(
+            row=3, column=0, columnspan=3, sticky="w", pady=6)
+        btns = ttk.Frame(f)
+        btns.grid(row=4, column=0, columnspan=3, sticky="w")
+        self.clock_apply_btn = ttk.Button(btns, text="Apply correction", command=self._on_clock_apply)
+        self.clock_apply_btn.pack(side="left")
+        self.clock_zero_btn = ttk.Button(btns, text="Reset correction to 0",
+                                         command=lambda: self._set_clock_calib(0))
+        self.clock_zero_btn.pack(side="left", padx=6)
+        ttk.Label(f, wraplength=540, justify="left", foreground="gray", text=(
+            "A longer measurement is more accurate (60 min gives about ±1 ppm). "
+            "To check the result, measure again after applying: the drift should be close to 0.")
+        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=8)
+        self.clock_new = None
+        self.clock_stop_flag = False
+        self.device_buttons += [self.clock_btn, self.clock_zero_btn]
+
     def _build_diag_tab(self):
         f = ttk.Frame(self.nb, padding=10)
         self.nb.add(f, text="Diagnostics")
@@ -210,6 +250,74 @@ class App(tk.Tk):
         ttk.Label(f, textvariable=self.selftest_var, font=("Consolas", 10), justify="left").grid(
             row=1, column=0, sticky="w", pady=6)
         self.device_buttons.append(self.selftest_btn)
+
+    def _build_firmware_tab(self):
+        f = ttk.Frame(self.nb, padding=10)
+        self.nb.add(f, text="Firmware")
+        ttk.Label(f, wraplength=560, justify="left", text=(
+            "Update the firmware over USB (no connection with the Connect button is needed).\n"
+            "1. Remove the battery and unplug the USB cable.\n"
+            "2. Hold the button down (with a pen tip) and plug in the USB cable.\n"
+            "3. When the LED starts the bootloader blinking, release the button.\n"
+            "4. Choose the firmware file (.hex) and press Update. "
+            "When it finishes, unplug and replug the USB cable.")).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(f, text="Firmware file:").grid(row=1, column=0, sticky="w", pady=(10, 2))
+        self.fw_path = tk.StringVar()
+        ttk.Entry(f, textvariable=self.fw_path, width=60).grid(row=2, column=0, columnspan=2, sticky="ew")
+        ttk.Button(f, text="Browse…", command=self._on_fw_browse).grid(row=2, column=2, padx=6)
+        self.fw_btn = ttk.Button(f, text="Update", command=self._on_fw_update)
+        self.fw_btn.grid(row=3, column=0, sticky="w", pady=8)
+        self.fw_log = tk.Text(f, height=9, width=80, font=("Consolas", 9), state="disabled")
+        self.fw_log.grid(row=4, column=0, columnspan=3, sticky="nsew")
+        f.columnconfigure(1, weight=1)
+        f.rowconfigure(4, weight=1)
+
+    def _on_fw_browse(self):
+        path = filedialog.askopenfilename(title="Firmware file", filetypes=[("Intel HEX", "*.hex")])
+        if path:
+            self.fw_path.set(path)
+
+    def _fw_log_add(self, line):
+        self.fw_log.configure(state="normal")
+        self.fw_log.insert("end", line + "\n")
+        self.fw_log.see("end")
+        self.fw_log.configure(state="disabled")
+
+    def _on_fw_update(self):
+        path = self.fw_path.get()
+        if not path:
+            messagebox.showwarning(APP_TITLE, "Choose a firmware file (.hex).")
+            return
+        try:
+            lo, hi, n = cl.check_app_hex(path)
+        except (OSError, RuntimeError, ValueError) as e:
+            messagebox.showerror(APP_TITLE, f"This file cannot be written.\n\n{e}")
+            return
+        avr = cl.find_avrdude()
+        if not avr:
+            messagebox.showerror(APP_TITLE, "avrdude was not found.\n\n"
+                                            "Put avrdude.exe and avrdude.conf in the same folder as this tool.")
+            return
+        if not messagebox.askyesno(APP_TITLE, f"Write this firmware ({n:,} bytes)?\n\n{path}\n\n"
+                                              "The C-Logger must be running the bootloader (see the steps)."):
+            return
+        if self.device.connected:
+            self._disconnect("Disconnected for the firmware update.")
+        self.fw_log.configure(state="normal")
+        self.fw_log.delete("1.0", "end")
+        self.fw_log.configure(state="disabled")
+
+        def done(rc):
+            if rc == 0:
+                self.status_var.set("Firmware updated.")
+                messagebox.showinfo(APP_TITLE, "Firmware updated.\nUnplug and replug the USB cable to start it.")
+            else:
+                self.status_var.set("Firmware update failed.")
+                messagebox.showerror(APP_TITLE, f"Firmware update failed (avrdude exit code {rc}).\n\n"
+                                                "Check that the C-Logger is running the bootloader.")
+
+        self._run("Updating firmware…", lambda: cl.update_firmware(
+            path, avr, output=lambda line: self.q.put(("fwlog", None, line))), done, "indeterminate")
 
     # ------------------------------------------------------------------
     # 非同期実行
@@ -243,6 +351,14 @@ class App(tk.Tk):
                 elif kind == "live_error":
                     self._stop_live()
                     self._handle_error(payload)
+                elif kind == "fwlog":
+                    self._fw_log_add(payload)
+                elif kind == "clockprog":
+                    el, total, ppm = payload
+                    self.progress.configure(mode="determinate", maximum=max(total, 1), value=min(el, total))
+                    est = "-" if ppm is None else f"{ppm:+.1f} ppm"
+                    self.status_var.set(f"Measuring clock drift… {el / 60:.1f} / {total / 60:.0f} min "
+                                        f"(estimate {est})")
                 elif kind == "progress":
                     n, total = payload
                     self.progress.configure(mode="determinate", maximum=max(total, 1), value=n)
@@ -260,6 +376,7 @@ class App(tk.Tk):
 
     def _task_finished(self):
         self.busy = False
+        self.clock_stop_btn.configure(state="disabled")
         self.progress.stop()
         self.progress.configure(mode="determinate", value=0)
         self._update_buttons()
@@ -324,6 +441,8 @@ class App(tk.Tk):
         # リアルタイム表示の停止はいつでもできるように
         if self.live_on:
             self.live_btn.configure(state="normal")
+        apply_ok = st == "normal" and self.clock_new is not None
+        self.clock_apply_btn.configure(state="normal" if apply_ok else "disabled")
         self.connect_btn.configure(state="disabled" if self.busy else "normal")
 
     # ------------------------------------------------------------------
@@ -333,8 +452,17 @@ class App(tk.Tk):
         def f(d):
             return {"hello": d.request("hello"), "id": d.request("get_id").get("device_id"),
                     "status": d.request("get_status"), "battery": d.request("get_battery"),
-                    "measure": d.request("measure")}  # センサ構成(CO2あり/なし)の判定に使う
+                    "measure": d.request("measure"),  # センサ構成(CO2あり/なし)の判定に使う
+                    "clock": self._get_clock_calib(d)}
         return self.device.call(f)
+
+    @staticmethod
+    def _get_clock_calib(d):
+        """時計の補正値 (FW 3.1.0 以降)。古いFWでは補正なしとして扱う"""
+        try:
+            return d.request("get_clock_calib")
+        except RuntimeError:
+            return {"ppm": 0, "unsupported": True}
 
     def _refresh_info(self):
         self._run("Reading device information…", self._read_info, self._on_info)
@@ -355,6 +483,8 @@ class App(tk.Tk):
             self.info_vars["period"].set("(no data)")
         has_co2 = info["measure"].get("co2_ppm") is not None
         self.info_vars["sensor"].set("CO2, temperature, humidity" if has_co2 else "Temperature, humidity")
+        self.clock_cur.set(f"Current correction: {info['clock']['ppm']:+d} ppm "
+                           "(positive = the crystal runs fast and is slowed down)")
         self.interval_var.set(s["interval"])
         self._update_capacity()
         self.status_var.set(f"Connected to {self.device.port}.")
@@ -485,6 +615,52 @@ class App(tk.Tk):
         self.live_hum.set(f"{r['hum_pct']:6.2f} %RH")
         co2 = r.get("co2_ppm")
         self.live_co2.set("" if co2 is None else f"{co2:5d} ppm")
+
+    # ------------------------------------------------------------------
+    # 時計の補正
+    # ------------------------------------------------------------------
+    def _on_clock_measure(self):
+        minutes = float(self.clock_min.get())
+        cur = self.info.get("clock", {}).get("ppm", 0)
+        self._stop_live()
+        self.clock_new = None
+        self.clock_stop_flag = False
+        self.clock_stop_btn.configure(state="normal")
+
+        def work():
+            return self.device.call(lambda d: d.measure_drift(
+                minutes * 60, progress=lambda el, total, ppm: self.q.put(("clockprog", None, (el, total, ppm))),
+                stop=lambda: self.clock_stop_flag))
+
+        def done(r):
+            ppm, err, n, sec = r
+            self.clock_stop_btn.configure(state="disabled")
+            self.clock_new = max(-127, min(127, round(cur + ppm)))
+            self.clock_result.set(
+                f"Drift      : {ppm:+.2f} ppm (±{err:.2f}, {n} points, {sec / 60:.1f} min)\n"
+                f"             {ppm * 0.0864:+.2f} s/day with the current correction ({cur:+d} ppm)\n"
+                f"Suggested  : {self.clock_new:+d} ppm")
+            self.status_var.set(f"Clock drift {ppm:+.2f} ppm.")
+            self._update_buttons()
+
+        self._run(f"Measuring clock drift ({minutes:.0f} min)…", work, done)
+
+    def _on_clock_stop(self):
+        self.clock_stop_flag = True
+        self.clock_stop_btn.configure(state="disabled")
+
+    def _on_clock_apply(self):
+        if self.clock_new is not None:
+            self._set_clock_calib(self.clock_new)
+
+    def _set_clock_calib(self, ppm):
+        def done(r):
+            self.clock_new = None
+            self.clock_result.set(f"Correction set to {r['ppm']:+d} ppm (saved to the device).")
+            self._refresh_info()
+
+        self._run("Setting clock correction…", lambda: self.device.call(
+            lambda d: d.request("set_clock_calib", {"ppm": ppm})), done)
 
     # ------------------------------------------------------------------
     # 自己診断

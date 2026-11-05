@@ -124,6 +124,8 @@ def main():
             pass
         mv = dev.cmd("get_battery").get("vbat_mV")
         print(f"電池電圧: {mv} mV")
+        # CO2あり版かどうか (CO2なし版は measure の co2_ppm が null)
+        has_co2 = dev.cmd("measure").get("co2_ppm") is not None
 
         print("既存の保存データを消去しています...")
         dev.cmd("clear_memory")
@@ -136,7 +138,8 @@ def main():
 
         dev.cmd("start_logging")
         print("\n計測を開始しました。USB通信は切断されます。")
-        print("（最初の約22秒はセンサのコンディショニングを行い、その後に記録を開始します）")
+        if has_co2:
+            print("（最初の約24秒はCO2センサのコンディショニングを行い、その後に記録を開始します）")
         print("→ データを読み出すには: デバイスをリセット後、read.py を実行してください。")
     except (RuntimeError, json.JSONDecodeError) as e:
         print(f"エラー: {e}")
