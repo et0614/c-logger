@@ -98,6 +98,12 @@ void EM_saveCorrectionFactor();
 //データ世代番号を書き込む
 void EM_saveGenerationNumber();
 
+//時計の補正値[ppm]を読む (正=水晶が速い)。未設定なら0
+int8_t EM_loadClockCalib(void);
+
+//時計の補正値[ppm]を保存する
+void EM_saveClockCalib(int8_t ppm);
+
 //XBeeが初期化済か否かを取得する
 bool EM_isXBeeInitialized();
 

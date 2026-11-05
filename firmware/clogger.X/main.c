@@ -6,7 +6,7 @@
  *
  * 動作モード:
  *   USB通信モード (起動時の既定, isLogging=false):
- *     USBをポーリングしてPCコマンドを処理。LEDは省電力のため1秒ごとに2回点滅(ハートビート)。
+ *     USBをポーリングしてPCコマンドを処理。LEDは省電力のため1秒ごとに短く1回点滅(ハートビート)。
  *   ロギングモード (start_loggingで移行, isLogging=true):
  *     STANDBYスリープ + PIT(1秒)で定期計測。省電力のためLEDは消灯のまま(点滅しない)。
  *     USBは処理しない。
@@ -127,6 +127,9 @@ int main(void)
     while (RTC.STATUS > 0) ;
     RTC.CTRLA |= RTC_RUNSTDBY_bm;
 
+    // 保存してある時計の補正値を RTC に設定する (set_clock_calib で設定)
+    Clock_SetCalib(EM_loadClockCalib());
+
     DELAY_milliseconds(100);
     sei();
     DELAY_milliseconds(100);
@@ -227,7 +230,7 @@ void executeSecondlyTask(void)
     // --- RSTボタン処理 & LED表示 -----------------------------------------
     //  ・押している間 : LED点灯 (計測できているか/生存の確認用)
     //  ・5秒以上長押し: ソフトウェアリセット → USB通信モードに戻る
-    //  ・非押し込み時 : USB通信モード=1秒ごとに2回点滅(省電力) / ロギングモード=消灯
+    //  ・非押し込み時 : USB通信モード=1秒ごとに1回点滅(省電力) / ロギングモード=消灯
     if (!RST_GetValue())  // 押し込み中 (アクティブLow)
     {
         turnOnGreenLED();
@@ -242,7 +245,7 @@ void executeSecondlyTask(void)
     {
         reset_timer = 0;
         if (isLogging) turnOffGreenLED();          // 計測モード: 消灯
-        else           blinkGreenLEDHeartbeat();   // USB通信モード: 2回点滅(省電力)
+        else           blinkGreenLEDHeartbeat();   // USB通信モード: 1秒ごとに1回点滅(省電力)
     }
 
     // --- 計測 (非ブロッキング, 省電力のためLEDは点滅させない) -------------
@@ -332,6 +335,26 @@ bool getLoggingActive(void)
 // ソフトウェア時計 (UNIX epoch秒) の設定/取得。set_time / get_status から使う。
 void Clock_Set(uint32_t epoch) { g_epoch = epoch; }
 uint32_t Clock_Get(void)       { return g_epoch; }
+
+// 時計の補正 [ppm] (正=水晶が速いので遅らせる)。RTC の水晶誤差補正 (CALIB/CORREN) を使う。
+// 100万クロックごとに |ppm| クロックを足し引きし、PIT(1秒)にも効く。
+// 進める向き(負)の補正にはプリスケーラ DIV2 以上が必要。RTC のカウンタは使っていないので DIV2 にしておく
+// (PIT はプリスケーラの前段から取るので影響しない)。
+static int8_t s_clock_calib = 0;
+
+void Clock_SetCalib(int8_t ppm)
+{
+    if (ppm < -127) ppm = -127;
+    s_clock_calib = ppm;
+    while (RTC.STATUS > 0) ;
+    RTC.CALIB = (ppm >= 0) ? (uint8_t)ppm : (uint8_t)(RTC_SIGN_bm | (uint8_t)(-ppm));
+    while (RTC.STATUS > 0) ;
+    uint8_t a = (RTC.CTRLA & ~(RTC_PRESCALER_gm | RTC_CORREN_bm)) | RTC_PRESCALER_DIV2_gc;
+    if (ppm != 0) a |= RTC_CORREN_bm;
+    RTC.CTRLA = a;
+}
+
+int8_t Clock_GetCalib(void) { return s_clock_calib; }
 
 // 電池電圧計測 (PF5 = ADC0 AIN21 に VBAT が直接接続されている前提)
 // 基準電圧は VDD (3.3V regulated)、8 sample 積算で精度確保。戻り値: VBAT [mV]

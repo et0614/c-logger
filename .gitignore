@@ -450,3 +450,10 @@ FodyWeavers.xsd
 *.msp
 # dump出力データ
 software/*.csv
+
+# 量産用にまとめた hex (firmware/bootloader/build_production_hex.py の出力)
+firmware/bootloader/hex/clogger_combined.hex
+# exe に同梱するために置く avrdude (配布物から入手する)
+software/avrdude.exe
+software/avrdude.conf
+software/*.spec

@@ -4,7 +4,7 @@
  *
  * 温湿度・CO2 の計測処理。STCC4 (CO2センサ) の single-shot 計測で CO2・温度・湿度を
  * まとめて取得し (温湿度は STCC4 が AHT4 を介して返す)、SensorData_t に変換して
- * 内蔵 Flash (W25Q64) に1レコードずつ保存する。
+ * 内蔵 Flash (W25Q128) に1レコードずつ保存する。
  *
  * 時刻はレコードに持たせない。計測開始日時(start_dt)と間隔(interval)は EEPROM に
  * 記録しておき、各レコードの時刻は start_dt + index*interval で復元する。

@@ -207,6 +207,31 @@ static void ph_set_time(int32_t id, const char *json,
     reply_ok(id);
 }
 
+// 時計の補正値 [ppm] を返す (正=水晶が速いので遅らせている)
+static void ph_get_clock_calib(int32_t id, const char *json,
+                               const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"ppm\":%d}\n", (long)id, (int)Clock_GetCalib());
+    send_line(b);
+}
+
+// 時計の補正値設定: params.ppm (-127〜127) を RTC に設定し EEPROM 保存する。
+static void ph_set_clock_calib(int32_t id, const char *json,
+                               const jsmntok_t *t, int ntok, int params)
+{
+    int pt = (params >= 0) ? obj_get(json, t, ntok, params, "ppm") : -1;
+    if (pt < 0) { reply_error(id, "missing_ppm"); return; }
+    int32_t ppm = tok_int(json, &t[pt]);
+    if (ppm < -127 || ppm > 127) { reply_error(id, "invalid_ppm"); return; }
+    Clock_SetCalib((int8_t)ppm);
+    EM_saveClockCalib((int8_t)ppm);
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"ppm\":%d}\n", (long)id, (int)ppm);
+    send_line(b);
+}
+
 // 計測間隔設定: params.sec (秒) を interval_co2 に設定し EEPROM 保存する。
 static void ph_set_interval(int32_t id, const char *json,
                             const jsmntok_t *t, int ntok, int params)
@@ -449,6 +474,8 @@ static const jp_command_t s_commands[] = {
     { "stop_logging",  ph_stop_logging  },
     { "set_time",      ph_set_time      },
     { "set_interval",  ph_set_interval  },
+    { "get_clock_calib", ph_get_clock_calib },
+    { "set_clock_calib", ph_set_clock_calib },
     { "clear_memory",  ph_clear_memory  },
     { "factory_reset", ph_factory_reset },
     { "get_status",    ph_get_status    },

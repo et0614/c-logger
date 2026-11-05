@@ -20,6 +20,8 @@ typedef struct {
     MeasurementSettings mSettings;
     char name[21];
     uint8_t gen_number;
+    int8_t  clock_calib;       // 時計の補正値 [ppm] (正=水晶が速い)
+    uint8_t clock_calib_check; // clock_calib のビット反転。一致しなければ未設定(0)とみなす
 } EepromMap;
 
 // 自動的にアドレス数値に変換
@@ -31,6 +33,8 @@ typedef struct {
 #define ADDR_BATCONFIG   (EEPROM_BASE_ADDR +offsetof(EepromMap, bConfig))
 #define ADDR_NAME        (EEPROM_BASE_ADDR +offsetof(EepromMap, name))
 #define ADDR_GEN_NUMBER  (EEPROM_BASE_ADDR +offsetof(EepromMap, gen_number))
+#define ADDR_CLOCK_CALIB (EEPROM_BASE_ADDR +offsetof(EepromMap, clock_calib))
+#define ADDR_CLOCK_CHECK (EEPROM_BASE_ADDR +offsetof(EepromMap, clock_calib_check))
 
 //データ世代数
 uint8_t EM_generationNumber = 1;
@@ -326,6 +330,24 @@ void EM_loadEEPROM()
 	loadMSettings();
     EM_generationNumber = EEPROM_Read(ADDR_GEN_NUMBER);
 	loadName();
+}
+
+//時計の補正値[ppm]を読む。未設定(消去状態や旧FWの領域)なら0
+int8_t EM_loadClockCalib(void)
+{
+    uint8_t v = EEPROM_Read(ADDR_CLOCK_CALIB);
+    uint8_t c = EEPROM_Read(ADDR_CLOCK_CHECK);
+    return (c == (uint8_t)~v) ? (int8_t)v : 0;
+}
+
+//時計の補正値[ppm]を保存する
+void EM_saveClockCalib(int8_t ppm)
+{
+    while(EEPROM_IsBusy());
+    EEPROM_Write(ADDR_CLOCK_CALIB, (uint8_t)ppm);
+    while(EEPROM_IsBusy());
+    EEPROM_Write(ADDR_CLOCK_CHECK, (uint8_t)~(uint8_t)ppm);
+    while(EEPROM_IsBusy());
 }
 
 //XBeeが初期化済か否かを取得する

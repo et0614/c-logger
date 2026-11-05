@@ -31,6 +31,10 @@ void oneSecHandler(void);
 void rstButtonHandler(void);
 void udtcHandler(void);
 
+// 時計の補正 [ppm] (正=水晶が速い)。RTC に設定する (保存はしない)
+void Clock_SetCalib(int8_t ppm);
+int8_t Clock_GetCalib(void);
+
 void executeSecondlyTask(void);
 
 // ロギング(計測)モードの開始/停止と状態取得 (USBコマンドから制御)
