@@ -11,7 +11,7 @@
 | `JLCPCB_BOM_noCO2.xlsx` / `JLCPCB_CPL_noCO2.xlsx` | CO2なし版（温湿度のみ）の入稿用BOM・部品配置データ（U7 なし、R7・R8 に 0Ω） |
 
 - BOM の列: Comment / Designator / Footprint / JLCPCB Part #。CPL の列: Designator / Mid X / Mid Y / Layer / Rotation
-- BOM・CPL は Fusion の部品配置出力（CAM の Assembly: `PnP_C-Logger_front.txt` / `back.txt`）と `hardware/BOM_next_draft.xlsx`（部品番号）から作成。UPDIテストパッドは実装部品ではないため除外。参照記号とパッケージは配置出力と全数一致を確認済み
+- BOM・CPL は Fusion の部品配置出力（CAM の Assembly: `PnP_C-Logger_front.txt` / `back.txt`）と `hardware/BOM.xlsx`（部品番号）から作成。UPDIテストパッドは実装部品ではないため除外。参照記号とパッケージは配置出力と全数一致を確認済み
 - 設計データ: `hardware/pcb/clogger.f3z`、回路図: `hardware/pcb/clogger_schematic.pdf`、外観: `docs/images/`、ケース（蓋）: `hardware/enclosure/case.stp`
 
 ## CO2あり版・なし版
@@ -30,12 +30,12 @@
 - USB-C（J1）のシェル足用長穴は外形レイヤ（GKO）のミリングで定義。**めっきスルーホール（PTH）として加工**されるよう備考で指定し、プレビューで確認する
 - AVR64DU32（U1）は JLC在庫なし → Global Sourcing
 - BT1（CR2032 電池ホルダ C964823）は**裏面のスルーホール部品**（Layer=Bottom）。JLCで実装するとスルーホール実装の費用がかかる。手はんだにする場合は BOM と CPL の BT1 行を削除
-- 部品の向き（Rotation）は Fusion の値のまま。**JLCのプレビューで、特にU1〜U7・Q1・D1・D2・J1・X1・SW1の向きと1番ピン位置を確認**し、ずれていれば発注画面で補正する
+- 部品の向き（Rotation）は Fusion の値のまま。**JLCのプレビューで、特にU1〜U7・Q1・D1・D2・J1・Y1・SW1の向きと1番ピン位置を確認**し、ずれていれば発注画面で補正する
 
 ## 版の履歴
 | 版 | 日付 | 変更内容 |
 |---|---|---|
-| 3.0 | 2026-10-23 | 全面改版（旧 CO2-Logger 基板から）。USB を表面実装 micro-B からシェル足スルーホールの USB-C に変更し USB給電に対応、電池を CR2032（スルーホールのホルダ）に、フラッシュを W25Q128（SOIC-8）に、K-Logger と部品を共通化して JLC Basic 部品中心に、CO2なし版（R7・R8 の 0Ω で切替）に対応、裏面シルクにブランドロゴ「Popolo」・製品名・版表記を追加。変更の詳細は `hardware/next_revision_changes.md` |
+| 3.0 | 2026-10-23 | 初版（試作）。USB-C・USB給電、CR2032、W25Q128、CO2なし版（R7・R8 の 0Ω で切替）に対応 |
 
 - ロゴの元データ: popolo3 リポジトリの `assets/logo/`
 
