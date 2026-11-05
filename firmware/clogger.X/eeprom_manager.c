@@ -1,362 +1,124 @@
-#include "mcc_generated_files/system/clock.h" //F_CPUの設定
-#include "mcc_generated_files/nvm/nvm.h" //EEPROM処理
+#include "mcc_generated_files/nvm/nvm.h" // EEPROM_Read / EEPROM_Write
 #include "eeprom_manager.h"
 #include "crc.h"
 #include <stddef.h>
-#include <string.h>
-#include <stdio.h>
-#include <avr/io.h>
 #include <util/atomic.h>
 
-// AVR64DU32 EEPROM開始アドレス (定数として定義)
+// AVR64DU32 の EEPROM 開始アドレス
 #define EEPROM_BASE_ADDR  0x1400
 
-// EEPROM全体のマップを定義（型定義のみ）
+// EEPROM の並びの版。並びを変えたら上げる (起動時に既定値で初期化し直す)
+#define EM_MAGIC           'C'
+#define EM_LAYOUT_VERSION  1
+
 typedef struct {
-    uint8_t init_flag;      // 0x0000
-    uint8_t xb_init_flag;   // 0x0001
-    CorrectionFactors cFactors; 
-    VelocityCharacteristicCoefficients vcCoefs;
-    MeasurementSettings mSettings;
-    char name[21];
-    uint8_t gen_number;
-    int8_t  clock_calib;       // 時計の補正値 [ppm] (正=水晶が速い)
-    uint8_t clock_calib_check; // clock_calib のビット反転。一致しなければ未設定(0)とみなす
+    uint8_t magic;              // EM_MAGIC
+    uint8_t layout;             // EM_LAYOUT_VERSION
+    MeasurementSettings settings;
+    Calibration calib;
 } EepromMap;
 
-// 自動的にアドレス数値に変換
-#define ADDR_INIT_FLAG   (EEPROM_BASE_ADDR +offsetof(EepromMap, init_flag))
-#define ADDR_XB_INIT     (EEPROM_BASE_ADDR +offsetof(EepromMap, xb_init_flag))
-#define ADDR_CFACTORS    (EEPROM_BASE_ADDR +offsetof(EepromMap, cFactors))
-#define ADDR_VCCOEFS     (EEPROM_BASE_ADDR +offsetof(EepromMap, vcCoefs))
-#define ADDR_MSETTINGS   (EEPROM_BASE_ADDR +offsetof(EepromMap, mSettings))
-#define ADDR_BATCONFIG   (EEPROM_BASE_ADDR +offsetof(EepromMap, bConfig))
-#define ADDR_NAME        (EEPROM_BASE_ADDR +offsetof(EepromMap, name))
-#define ADDR_GEN_NUMBER  (EEPROM_BASE_ADDR +offsetof(EepromMap, gen_number))
-#define ADDR_CLOCK_CALIB (EEPROM_BASE_ADDR +offsetof(EepromMap, clock_calib))
-#define ADDR_CLOCK_CHECK (EEPROM_BASE_ADDR +offsetof(EepromMap, clock_calib_check))
+#define ADDR_MAGIC     (EEPROM_BASE_ADDR + offsetof(EepromMap, magic))
+#define ADDR_LAYOUT    (EEPROM_BASE_ADDR + offsetof(EepromMap, layout))
+#define ADDR_SETTINGS  (EEPROM_BASE_ADDR + offsetof(EepromMap, settings))
+#define ADDR_CALIB     (EEPROM_BASE_ADDR + offsetof(EepromMap, calib))
 
-//データ世代数
-uint8_t EM_generationNumber = 1;
+MeasurementSettings EM_settings;
+Calibration EM_calib;
 
-//補正係数
-CorrectionFactors EM_cFactors;
+// <editor-fold defaultstate="collapsed" desc="EEPROM の読み書き">
 
-//風速特性係数
-VelocityCharacteristicCoefficients EM_vcCoefficients;
-
-//計測設定
-MeasurementSettings EM_mSettings;
-
-//名称
-char EM_clName[21];
-
-// <editor-fold defaultstate="collapsed" desc="inline関数の定義">
-
-inline static float max(float x, float y)
+static void write_byte(uint16_t addr, uint8_t v)
 {
-	return (x > y) ? x : y;
-}
-
-inline static float min(float x, float y)
-{
-	return (x > y) ? y : x;
-}
-
-// </editor-fold>
-
-// <editor-fold defaultstate="collapsed" desc="EEPROMブロック読み込み・書き込み処理">
-
-//ブロック書き込み
-static void write_eep_block(const void* src, uint16_t dst_addr, size_t size)
-{
-    const uint8_t* pSrc = (const uint8_t*)src;
-    for (size_t i = 0; i < size; i++) {   
-        while(EEPROM_IsBusy());
-        if (EEPROM_Read(dst_addr + i) != pSrc[i])
-        {
-            //書き込み可能になるまで待機
-            while(EEPROM_IsBusy());
-            //アトミックに書き込み実行
-            ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-                EEPROM_Write(dst_addr + i, pSrc[i]);
-            }
-        }
-    }
-    
-    //書き込みが完了したことを確認して処理を終える
-    while(EEPROM_IsBusy());
-}
-
-// ブロック読み込み
-static void read_eep_block(void* dst, uint16_t src_addr, size_t size)
-{
-    uint8_t* pDst = (uint8_t*)dst;
-    for (size_t i = 0; i < size; i++) {
-        pDst[i] = EEPROM_Read(src_addr + i);
+    while (EEPROM_IsBusy());
+    if (EEPROM_Read(addr) == v) return; // 同じ値なら書かない (書き換え回数を減らす)
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        EEPROM_Write(addr, v);
     }
 }
 
-// </editor-fold>
-
-// <editor-fold defaultstate="collapsed" desc="書き込み処理">
-
-//補正係数を書き込む
-static void writeCFactors()
-{    
-	// CRCを計算
-	EM_cFactors.crc = CRC_calc8(
-        (uint8_t*)&EM_cFactors,
-        sizeof(CorrectionFactors) - sizeof(EM_cFactors.crc) //crcメンバー自身のサイズは計算範囲から除外する
-	);
-    
-	write_eep_block(&EM_cFactors, ADDR_CFACTORS, sizeof(CorrectionFactors));
+static void write_block(const void *src, uint16_t addr, size_t size)
+{
+    const uint8_t *p = (const uint8_t *)src;
+    for (size_t i = 0; i < size; i++) write_byte(addr + i, p[i]);
+    while (EEPROM_IsBusy()); // 書き込み完了を待つ
 }
 
-//風速特性係数を書き込む
-static void writeVCCoefficients()
+static void read_block(void *dst, uint16_t addr, size_t size)
 {
-	// CRCを計算
-	EM_vcCoefficients.crc = CRC_calc8(
-        (uint8_t*)&EM_vcCoefficients,
-        sizeof(VelocityCharacteristicCoefficients) - sizeof(EM_vcCoefficients.crc) //crcメンバー自身のサイズは計算範囲から除外する
-	);
-	
-	write_eep_block(&EM_vcCoefficients, ADDR_VCCOEFS, sizeof(VelocityCharacteristicCoefficients));
+    uint8_t *p = (uint8_t *)dst;
+    for (size_t i = 0; i < size; i++) p[i] = EEPROM_Read(addr + i);
 }
 
-//計測設定を書き込む
-static void writeMSettings()
+// 末尾の crc メンバーを除いた CRC
+static uint8_t crc_of(const void *p, size_t size_with_crc)
 {
-	// CRCを計算
-	EM_mSettings.crc = CRC_calc8(
-        (uint8_t*)&EM_mSettings,
-        sizeof(MeasurementSettings) - sizeof(EM_mSettings.crc) //crcメンバー自身のサイズは計算範囲から除外する
-	);
-	
-	write_eep_block(&EM_mSettings, ADDR_MSETTINGS, sizeof(MeasurementSettings));
+    return CRC_calc8((uint8_t *)p, (uint8_t)(size_with_crc - 1));
 }
 
 // </editor-fold>
 
-// <editor-fold defaultstate="collapsed" desc="初期化処理">
+// <editor-fold defaultstate="collapsed" desc="既定値">
 
-static void initCFactors(){
-	/*EM_cFactors = (CorrectionFactors){
-		1, //バージョン
-		DBT_COEF_A, //乾球温度a
-		DBT_COEF_B, //乾球温度b
-		HMD_COEF_A, //相対湿度a
-		HMD_COEF_B, //相対湿度b
-		GLB_COEF_A, //グローブ温度a
-		GLB_COEF_B, //グローブ温度b
-		1.0, //照度a
-		0.0, //照度b
-		1.0, //風速a
-		0.0, //風速b
-		0 //CRC（一旦0で初期化）
-	};*/
-}
-
-static void initVCCoefficients(){
-	/*EM_vcCoefficients = (VelocityCharacteristicCoefficients){
-		1,		//バージョン
-		VOL_VEL0,       //無風電圧
-		VEL_COEF_A1,	//係数A1
-		VEL_COEF_B1,    //係数B1
-		VEL_COEF_A2,	//係数A2
-		VEL_COEF_B2,	//係数B2
-        VEL_SWITCH,     //切り替え風速
-		0		//CRC（一旦0で初期化）
-	};*/
-}
-
-static void initMSettings(){
-	// v4 デフォルト: 全カテゴリ (general/velocity/illuminance) を enabled、
-	// interval=60sec (Eneloop 想定での電池寿命と粒度のバランス)
-	EM_mSettings = (MeasurementSettings){
-        1,		//バージョン
-		false, //自動測定開始
-		true, //乾球温度の計測真偽 (general)
-		true, //グローブ温度の計測真偽 (general)
-		true, //風速の計測真偽 (velocity)
-		true, //照度の計測真偽 (illuminance)
-		false, //汎用AD1の計測真偽 (v4 未使用)
-		false, //汎用AD2の計測真偽 (v4 未使用)
-		false, //汎用AD3の計測真偽 (v4 未使用)
-		false, //近接センサの計測真偽 (v4 未使用)
-		true,  //CO2の計測真偽 (general)
-		60, //乾球温度の計測間隔[sec]
-		60, //グローブ温度の計測間隔[sec]
-		60, //風速の計測間隔[sec]
-		60, //照度の計測間隔[sec]
-		1, //汎用AD1の計測間隔[sec] (v4 未使用)
-		1, //汎用AD2の計測間隔[sec] (v4 未使用)
-		1, //汎用AD3の計測間隔[sec] (v4 未使用)
-		1, //近接センサの計測間隔[sec] (v4 未使用)
-		60, //CO2の計測間隔[sec]
-		1609459200,	//計測開始日時 (UNIX時間,UTC時差0で2021/1/1 00:00:00)
-		0		//CRC（一旦0で初期化）
-	};
-}
-
-//メモリを初期化する
-static void initMemory()
+static void defaultSettings(void)
 {
-	//補正係数
-	initCFactors();
-	writeCFactors();
+    EM_settings = (MeasurementSettings){
+        .interval = 60,
+        .start_dt = 0,
+    };
+}
 
-	//風速計特性係数
-	initVCCoefficients();
-	writeVCCoefficients();
-	
-	//計測設定
-	initMSettings();
-	writeMSettings();
-        
-	//名前
-	//write_eep_block((const void *)ML_NAME, ADDR_NAME, sizeof(EM_clName));
-	
-    //データ世代番号
-    while(EEPROM_IsBusy());
-    EEPROM_Write(ADDR_GEN_NUMBER, EM_generationNumber);
-    
-	//XBee初期化フラグ
-    while(EEPROM_IsBusy());
-    EEPROM_Write(ADDR_XB_INIT, 'F');
-	
-	//初期化フラグ
-    while(EEPROM_IsBusy());
-    EEPROM_Write(ADDR_INIT_FLAG, 'T');
+static void defaultCalibration(void)
+{
+    const LinearCorr none = { EM_CORR_A_SCALE, 0 }; // a = 1, b = 0 (補正なし)
+    EM_calib = (Calibration){
+        .temp = none,
+        .hum = none,
+        .co2 = none,
+        .clock_ppm = 0,
+    };
 }
 
 // </editor-fold>
 
-// <editor-fold defaultstate="collapsed" desc="読み込み処理">
-
-//補正係数を読み込む
-static void loadCFactors()
+void EM_saveSettings(void)
 {
-    read_eep_block(&EM_cFactors, ADDR_CFACTORS, sizeof(CorrectionFactors));
-
-	// 読み込んだデータのCRCを検証
-	uint8_t expected_crc = EM_cFactors.crc;
-	uint8_t actual_crc = CRC_calc8(
-		(uint8_t*)&EM_cFactors,
-		sizeof(CorrectionFactors) - sizeof(EM_cFactors.crc)
-	);
-
-	// CRCが一致しない（データ破損）場合にはデフォルト値で再初期化
-	if (expected_crc != actual_crc) initCFactors();
+    EM_settings.crc = crc_of(&EM_settings, sizeof(EM_settings));
+    write_block(&EM_settings, ADDR_SETTINGS, sizeof(EM_settings));
 }
 
-//風速の特性係数を読み込む
-static void loadVCCoefficients()
+void EM_saveCalibration(void)
 {
-	read_eep_block(&EM_vcCoefficients, ADDR_VCCOEFS, sizeof(VelocityCharacteristicCoefficients));
-
-	// 読み込んだデータのCRCを検証
-	uint8_t expected_crc = EM_vcCoefficients.crc;
-	uint8_t actual_crc = CRC_calc8(
-		(uint8_t*)&EM_vcCoefficients,
-		sizeof(VelocityCharacteristicCoefficients) - sizeof(EM_vcCoefficients.crc)
-	);
-
-	// CRCが一致しない（データ破損）場合にはデフォルト値で再初期化
-	if (expected_crc != actual_crc) initVCCoefficients();
+    EM_calib.crc = crc_of(&EM_calib, sizeof(EM_calib));
+    write_block(&EM_calib, ADDR_CALIB, sizeof(EM_calib));
 }
 
-//計測設定を読み込む
-static void loadMSettings()
+void EM_loadEEPROM(void)
 {
-	read_eep_block(&EM_mSettings, ADDR_MSETTINGS, sizeof(MeasurementSettings));
+    // 未初期化 (消去状態) か並びが変わったら、全体を既定値にする
+    if (EEPROM_Read(ADDR_MAGIC) != EM_MAGIC || EEPROM_Read(ADDR_LAYOUT) != EM_LAYOUT_VERSION)
+    {
+        defaultSettings();
+        defaultCalibration();
+        EM_saveSettings();
+        EM_saveCalibration();
+        write_byte(ADDR_LAYOUT, EM_LAYOUT_VERSION);
+        write_byte(ADDR_MAGIC, EM_MAGIC);   // 最後に書く (途中で電源が落ちたら次回やり直す)
+        while (EEPROM_IsBusy());
+        return;
+    }
 
-	// 読み込んだデータのCRCを検証
-	uint8_t expected_crc = EM_mSettings.crc;
-	uint8_t actual_crc = CRC_calc8(
-		(uint8_t*)&EM_mSettings,
-		sizeof(MeasurementSettings) - sizeof(EM_mSettings.crc)
-	);
-
-	// CRCが一致しない（データ破損）場合にはデフォルト値で再初期化
-	if (expected_crc != actual_crc) initMSettings();
-}
-
-//名称を読み込む
-static void loadName()
-{
-	read_eep_block((void *)EM_clName, ADDR_NAME, sizeof(EM_clName));
-}
-
-// </editor-fold>
-
-// (v3 プロトコル解析/応答整形は v4 移行で削除: EM_applySetCorrectionFactorCommand,
-//  EM_makeSetCorrectionFactorResponse, EM_applySetVelocityCharacteristicsCommand,
-//  EM_makeSetVelocityCharateristicsResponse, EM_applyChangeMeasurementSettingsCommand,
-//  EM_makeMeasurementSettingsResponse — protocol_handlers 側で構造体直接操作)
-
-//計測設定を保存する
-void EM_saveMeasurementSetting()
-{
-	writeMSettings();	
-}
-
-//名称を書き込む
-void EM_saveName()
-{
-	write_eep_block((const void *)EM_clName, ADDR_NAME, sizeof(EM_clName));
-}
-
-//補正係数を保存する (v4 set_correction 用)
-void EM_saveCorrectionFactor()
-{
-	writeCFactors();
-}
-
-//データ世代番号を書き込む
-void EM_saveGenerationNumber()
-{
-    while(EEPROM_IsBusy());
-    EEPROM_Write(ADDR_GEN_NUMBER, EM_generationNumber);
-}
-
-//設定を読み込む
-void EM_loadEEPROM()
-{
-	if (EEPROM_Read(ADDR_INIT_FLAG) != 'T') initMemory();
-	loadCFactors();
-	loadVCCoefficients();
-	loadMSettings();
-    EM_generationNumber = EEPROM_Read(ADDR_GEN_NUMBER);
-	loadName();
-}
-
-//時計の補正値[ppm]を読む。未設定(消去状態や旧FWの領域)なら0
-int8_t EM_loadClockCalib(void)
-{
-    uint8_t v = EEPROM_Read(ADDR_CLOCK_CALIB);
-    uint8_t c = EEPROM_Read(ADDR_CLOCK_CHECK);
-    return (c == (uint8_t)~v) ? (int8_t)v : 0;
-}
-
-//時計の補正値[ppm]を保存する
-void EM_saveClockCalib(int8_t ppm)
-{
-    while(EEPROM_IsBusy());
-    EEPROM_Write(ADDR_CLOCK_CALIB, (uint8_t)ppm);
-    while(EEPROM_IsBusy());
-    EEPROM_Write(ADDR_CLOCK_CHECK, (uint8_t)~(uint8_t)ppm);
-    while(EEPROM_IsBusy());
-}
-
-//XBeeが初期化済か否かを取得する
-bool EM_isXBeeInitialized(){
-	return EEPROM_Read(ADDR_XB_INIT) == 'T';
-}
-
-//XBee初期化を記録する
-void EM_xbeeInitialized(){
-    while(EEPROM_IsBusy());
-   	EEPROM_Write(ADDR_XB_INIT, 'T');
+    // ブロックごとに CRC を確かめ、壊れていれば既定値に戻す
+    read_block(&EM_settings, ADDR_SETTINGS, sizeof(EM_settings));
+    if (EM_settings.crc != crc_of(&EM_settings, sizeof(EM_settings)))
+    {
+        defaultSettings();
+        EM_saveSettings();
+    }
+    read_block(&EM_calib, ADDR_CALIB, sizeof(EM_calib));
+    if (EM_calib.crc != crc_of(&EM_calib, sizeof(EM_calib)))
+    {
+        defaultCalibration();
+        EM_saveCalibration();
+    }
 }

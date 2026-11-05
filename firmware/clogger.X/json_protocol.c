@@ -3,7 +3,7 @@
 #include "usb_comm.h"   // USB_Comm_SendString
 #include "version.h"    // FW_VERSION / PROTOCOL_VERSION
 #include "main.h"       // getBatteryVoltage_mV / Clock_Set/Get / setLoggingActive
-#include "eeprom_manager.h" // EM_mSettings / EM_saveMeasurementSetting
+#include "eeprom_manager.h" // EM_settings / EM_calib
 #include "measurement.h"    // Measurement_ClearData
 #include "w25q64.h"         // W25_Count_Record (get_status)
 
@@ -226,22 +226,23 @@ static void ph_set_clock_calib(int32_t id, const char *json,
     int32_t ppm = tok_int(json, &t[pt]);
     if (ppm < -127 || ppm > 127) { reply_error(id, "invalid_ppm"); return; }
     Clock_SetCalib((int8_t)ppm);
-    EM_saveClockCalib((int8_t)ppm);
+    EM_calib.clock_ppm = (int8_t)ppm;
+    EM_saveCalibration();
     char b[JP_REPLY_CAP];
     snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"ppm\":%d}\n", (long)id, (int)ppm);
     send_line(b);
 }
 
-// 計測間隔設定: params.sec (秒) を interval_co2 に設定し EEPROM 保存する。
+// 記録間隔の設定: params.sec (1〜65535 秒) を EEPROM に保存する。
 static void ph_set_interval(int32_t id, const char *json,
                             const jsmntok_t *t, int ntok, int params)
 {
     int st = (params >= 0) ? obj_get(json, t, ntok, params, "sec") : -1;
     if (st < 0) { reply_error(id, "missing_sec"); return; }
     int32_t sec = tok_int(json, &t[st]);
-    if (sec <= 0) { reply_error(id, "invalid_sec"); return; }
-    EM_mSettings.interval_co2 = (unsigned int)sec;
-    EM_saveMeasurementSetting();
+    if (sec <= 0 || sec > 65535) { reply_error(id, "invalid_sec"); return; }
+    EM_settings.interval = (uint16_t)sec;
+    EM_saveSettings();
     char b[JP_REPLY_CAP];
     snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"interval\":%ld}\n",
              (long)id, (long)sec);
@@ -280,11 +281,11 @@ static void ph_get_status(int32_t id, const char *json,
         "\"count\":%lu,\"capacity\":%lu,\"epoch\":%lu,\"start_dt\":%lu}\n",
         (long)id,
         getLoggingActive() ? "true" : "false",
-        (unsigned)EM_mSettings.interval_co2,
+        (unsigned)EM_settings.interval,
         (unsigned long)W25_Count_Record(),
         (unsigned long)MAX_RECORD_COUNT,
         (unsigned long)Clock_Get(),
-        (unsigned long)EM_mSettings.start_dt);
+        (unsigned long)EM_settings.start_dt);
     send_line(b);
 }
 
@@ -351,6 +352,143 @@ static void ph_selftest(int32_t id, const char *json,
     send_line(b);
 }
 
+// ============================================================
+// 温度・湿度・CO2 の補正係数 (補正後 = a × 生値 + b)
+//   記録・measure・dump はすべて生値。補正は PC ツールが読み出し時に適用する。
+//   係数は JSON では小数で送受信し、機器内は固定小数点 (eeprom_manager.h) で持つ。
+//   a: 0.8〜1.2 (小数5桁まで)、b: 小数2桁まで (温度 ±5℃、湿度 ±15%RH、CO2 ±2000ppm)
+// ============================================================
+
+// 小数の文字列トークンを scale 倍の整数にする (例: "1.0123", scale=100000 → 101230)。
+// 指数表記は受け付けない。桁が多すぎる・数字でない場合は false。
+static bool tok_fixed(const char *json, const jsmntok_t *t, int32_t scale, int32_t *out)
+{
+    if (t->type != JSMN_PRIMITIVE) return false;
+    const char *p = json + t->start, *end = json + t->end;
+    bool neg = false;
+    if (p < end && (*p == '-' || *p == '+')) { neg = (*p == '-'); p++; }
+    int32_t ip = 0, fp = 0, fs = 1;  // 整数部、小数部、小数部の桁の重み
+    bool digit = false;
+    for (; p < end && *p >= '0' && *p <= '9'; p++)
+    {
+        if (ip > 100000) return false;
+        ip = ip * 10 + (*p - '0');
+        digit = true;
+    }
+    if (p < end && *p == '.')
+    {
+        for (p++; p < end && *p >= '0' && *p <= '9'; p++)
+        {
+            if (fs < scale) { fp = fp * 10 + (*p - '0'); fs *= 10; } // scale より細かい桁は切り捨て
+            digit = true;
+        }
+    }
+    if (p != end || !digit) return false;
+    int32_t v = ip * scale + fp * (scale / fs);
+    *out = neg ? -v : v;
+    return true;
+}
+
+// scale 倍の整数を小数の文字列にする (例: 101230, scale=100000 → "1.01230")
+static void fmt_fixed(char *buf, size_t n, int32_t v, int32_t scale)
+{
+    int digits = 0;
+    for (int32_t s = scale; s > 1; s /= 10) digits++;
+    int32_t a = v < 0 ? -v : v;
+    snprintf(buf, n, "%s%ld.%0*ld", v < 0 ? "-" : "", (long)(a / scale), digits, (long)(a % scale));
+}
+
+// 補正係数を {"a":..,"b":..} にして buf の末尾に足す
+static void append_corr(char *buf, size_t n, const char *key, const LinearCorr *c)
+{
+    char a[16], b[16];
+    fmt_fixed(a, sizeof(a), c->a, EM_CORR_A_SCALE);
+    fmt_fixed(b, sizeof(b), c->b, EM_CORR_B_SCALE);
+    size_t len = strlen(buf);
+    snprintf(buf + len, n - len, ",\"%s\":{\"a\":%s,\"b\":%s}", key, a, b);
+}
+
+// 補正係数を返す: {"id":N,"ok":true,"temp":{"a":1.00000,"b":0.00},"hum":{..},"co2":{..}}
+static void reply_correction(int32_t id)
+{
+    char b[192];
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true", (long)id);
+    append_corr(b, sizeof(b), "temp", &EM_calib.temp);
+    append_corr(b, sizeof(b), "hum", &EM_calib.hum);
+    append_corr(b, sizeof(b), "co2", &EM_calib.co2);
+    strncat(b, "}\n", sizeof(b) - strlen(b) - 1);
+    send_line(b);
+}
+
+static void ph_get_correction(int32_t id, const char *json,
+                              const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    reply_correction(id);
+}
+
+// params の key ({"a":..,"b":..}) を読む。key が無ければ c はそのまま。
+// @return false: 値が不正 (形式・範囲)
+static bool parse_corr(const char *json, const jsmntok_t *t, int ntok, int params,
+                       const char *key, int32_t b_limit, LinearCorr *c)
+{
+    int o = obj_get(json, t, ntok, params, key);
+    if (o < 0) return true;
+    int at = obj_get(json, t, ntok, o, "a");
+    int bt = obj_get(json, t, ntok, o, "b");
+    if (at < 0 || bt < 0) return false;
+    LinearCorr v;
+    if (!tok_fixed(json, &t[at], EM_CORR_A_SCALE, &v.a)) return false;
+    if (!tok_fixed(json, &t[bt], EM_CORR_B_SCALE, &v.b)) return false;
+    if (v.a < EM_CORR_A_SCALE * 8 / 10 || v.a > EM_CORR_A_SCALE * 12 / 10) return false;
+    if (v.b < -b_limit || v.b > b_limit) return false;
+    *c = v;
+    return true;
+}
+
+// 補正係数の設定: params {"temp":{"a":1.0,"b":-0.3},"hum":{..},"co2":{..}} (指定したものだけ変える)
+// EEPROM に保存し、設定後の全係数を返す。
+static void ph_set_correction(int32_t id, const char *json,
+                              const jsmntok_t *t, int ntok, int params)
+{
+    if (params < 0) { reply_error(id, "missing_params"); return; }
+    Calibration c = EM_calib;
+    if (!parse_corr(json, t, ntok, params, "temp", 5 * EM_CORR_B_SCALE, &c.temp) ||
+        !parse_corr(json, t, ntok, params, "hum", 15 * EM_CORR_B_SCALE, &c.hum) ||
+        !parse_corr(json, t, ntok, params, "co2", 2000 * EM_CORR_B_SCALE, &c.co2))
+    {
+        reply_error(id, "invalid_correction");
+        return;
+    }
+    EM_calib = c;
+    EM_saveCalibration();
+    reply_correction(id);
+}
+
+// CO2 の強制校正 (FRC): params.ppm (基準の CO2 濃度) にセンサの出力を合わせる。センサ内部に保存される。
+// STCC4 の手順どおり、直前に安定した環境で 30 回以上計測 (measure) してから呼ぶ。
+// 応答の correction はセンサが適用した補正量 [ppm]。
+static void ph_co2_frc(int32_t id, const char *json,
+                       const jsmntok_t *t, int ntok, int params)
+{
+    int pt = (params >= 0) ? obj_get(json, t, ntok, params, "ppm") : -1;
+    if (pt < 0) { reply_error(id, "missing_ppm"); return; }
+    int32_t ppm = tok_int(json, &t[pt]);
+    if (ppm < 300 || ppm > 5000) { reply_error(id, "invalid_ppm"); return; }
+    int16_t corr;
+    switch (Measurement_ForcedRecalibration((uint16_t)ppm, &corr))
+    {
+    case FRC_NO_CO2:      reply_error(id, "no_co2_sensor"); return;
+    case FRC_NOT_READY:   reply_error(id, "need_30_measurements"); return;
+    case FRC_FAILED:      reply_error(id, "frc_failed"); return;
+    default: break;
+    }
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"ppm\":%ld,\"correction\":%d}\n",
+             (long)id, (long)ppm, (int)corr);
+    send_line(b);
+}
+
 // 1回の送出にまとめるレコード数 (6B*40=240B。CDC送信バッファ512B以内)。
 // 1レコードずつ送ると転送回数が増えて遅いので、まとめて USB_Comm_SendBytes に渡す。
 #define DUMP_BATCH_RECS  40
@@ -395,7 +533,7 @@ static void ph_dump(int32_t id, const char *json,
         "{\"id\":%ld,\"ok\":true,\"dump\":\"begin\",\"count\":%lu,\"rec_size\":%u,"
         "\"start_dt\":%lu,\"interval\":%u}\n",
         (long)id, (unsigned long)count, (unsigned)sizeof(SensorData_t),
-        (unsigned long)EM_mSettings.start_dt, (unsigned)EM_mSettings.interval_co2);
+        (unsigned long)EM_settings.start_dt, (unsigned)EM_settings.interval);
     send_line(b);
 
     // レコード本体 (生バイナリ, まとめ送り)
@@ -448,7 +586,7 @@ static void ph_dump_range(int32_t id, const char *json,
         "\"total\":%lu,\"rec_size\":%u,\"start_dt\":%lu,\"interval\":%u}\n",
         (long)id, (unsigned long)s, (unsigned long)c, (unsigned long)total,
         (unsigned)sizeof(SensorData_t),
-        (unsigned long)EM_mSettings.start_dt, (unsigned)EM_mSettings.interval_co2);
+        (unsigned long)EM_settings.start_dt, (unsigned)EM_settings.interval);
     send_line(b);
 
     dump_records_binary(s, c); // まとめ送り
@@ -476,6 +614,9 @@ static const jp_command_t s_commands[] = {
     { "set_interval",  ph_set_interval  },
     { "get_clock_calib", ph_get_clock_calib },
     { "set_clock_calib", ph_set_clock_calib },
+    { "get_correction", ph_get_correction },
+    { "set_correction", ph_set_correction },
+    { "co2_frc",       ph_co2_frc       },
     { "clear_memory",  ph_clear_memory  },
     { "factory_reset", ph_factory_reset },
     { "get_status",    ph_get_status    },

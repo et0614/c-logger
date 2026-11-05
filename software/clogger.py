@@ -16,6 +16,9 @@ USB接続した C-Logger の状態確認・記録開始・データ読み出し�
     python clogger.py clock                   時計の補正値を表示
     python clogger.py clock -m 60 [--apply]   時計のずれを60分測る (--apply で補正値を書き込む)
     python clogger.py clock --set N           時計の補正値を N ppm にする (0 で補正なし)
+    python clogger.py correction              温度・湿度・CO2 の補正係数を表示 (補正後 = a × 生値 + b)
+    python clogger.py correction --temp A B   温度の補正係数を設定 (--hum, --co2 も同様。--reset で補正なし)
+    python clogger.py frc 420                 CO2 の強制校正 (基準濃度 420 ppm の外気などで、約1分計測してから実行)
     python clogger.py update firmware.hex     USB でファームウェアを更新 (ブートローダで起動しておく。avrdude が必要)
     (GUI版: python clogger_gui.py)
     共通オプション: -p COM3 (ポート指定。省略時は自動検出)
@@ -23,8 +26,12 @@ USB接続した C-Logger の状態確認・記録開始・データ読み出し�
 記録中の機器はUSBに応答しない。読み出すときはUSBを挿し直すと自動でUSB通信モードに戻る
 (記録はその時点で停止し、データは保存される)。ボタンの5秒長押しでも記録を止められる。
 
-CSV列: index, epoch, datetime, temp_C, hum_pct, co2_ppm
-  計測失敗(欠測)の記録は temp/hum/co2 が空欄。CO2なし版(温湿度のみ)は co2_ppm が空欄。
+CSV列: index, epoch, datetime, temp_C, hum_pct, co2_ppm, temp_raw_C, hum_raw_pct, co2_raw_ppm
+  temp_C 〜 co2_ppm は機器に保存した補正係数で補正した値、*_raw は補正前の値 (機器に記録した値)。
+  計測失敗(欠測)の記録は空欄。CO2なし版(温湿度のみ)は co2 の列が空欄。
+
+補正係数は機器ごとに機器の EEPROM に保存する。記録・measure は補正前の値で、このツールが表示・保存時に補正する
+(係数を後から直しても過去のデータに使える)。
 
 依存: pip install pyserial
 """
@@ -55,6 +62,50 @@ CO2_INVALID = 0xFFFF   # 計測失敗(欠測)の記録
 CO2_NONE = 0xFFFE      # CO2なし版の記録 (温湿度は有効)
 
 DUMP_CHUNK = 10000  # dump_range 1回あたりのレコード数 (60KB)
+
+FRC_SAMPLES = 40    # CO2 の強制校正の前の計測回数 (STCC4 は 30 回以上必要)
+FRC_DEFAULT_PPM = 420  # 外気の CO2 濃度の目安
+
+
+class Correction:
+    """温度・湿度・CO2 の線形補正 (補正後 = a × 生値 + b)。get_correction の応答から作る"""
+    KEYS = ("temp", "hum", "co2")
+    NAMES = {"temp": "温度", "hum": "湿度", "co2": "CO2"}
+    UNITS = {"temp": "°C", "hum": "%RH", "co2": "ppm"}
+
+    def __init__(self, coefs=None):
+        self.coefs = {k: (1.0, 0.0) for k in self.KEYS}
+        for k in self.KEYS:
+            if coefs and k in coefs:
+                self.coefs[k] = (float(coefs[k]["a"]), float(coefs[k]["b"]))
+
+    @property
+    def is_identity(self):
+        return all(v == (1.0, 0.0) for v in self.coefs.values())
+
+    def apply(self, key, raw):
+        """生値 → 補正後の値 (None はそのまま)。湿度は 0〜100 に、CO2 は整数に丸める"""
+        if raw is None:
+            return None
+        a, b = self.coefs[key]
+        v = a * raw + b
+        if key == "hum":
+            return min(100.0, max(0.0, v))
+        if key == "co2":
+            return max(0, round(v))
+        return v
+
+    def apply_measure(self, r):
+        """measure 応答 (生値) → 補正後の値の dict (temp_C, hum_pct, co2_ppm)"""
+        return {"temp_C": self.apply("temp", r["temp_C"]), "hum_pct": self.apply("hum", r["hum_pct"]),
+                "co2_ppm": self.apply("co2", r.get("co2_ppm"))}
+
+    def to_params(self):
+        return {k: {"a": round(a, 5), "b": round(b, 2)} for k, (a, b) in self.coefs.items()}
+
+    def describe(self, key):
+        a, b = self.coefs[key]
+        return f"a = {a:.5f}  b = {b:+.2f} {self.UNITS[key]}"
 
 
 def decode_record(temp, hum, co2):
@@ -156,6 +207,12 @@ class CLogger:
             hdr, part = self.dump_range(start, cnt, cb)
             recs += part
         return hdr["start_dt"], hdr["interval"], recs
+
+    def get_correction(self):
+        return Correction(self.request("get_correction"))
+
+    def set_correction(self, corr):
+        return Correction(self.request("set_correction", corr.to_params()))
 
     def _epoch_transition(self, timeout=3.0):
         """機器の時計(epoch)が1秒進む瞬間の PC 時刻を推定する。@return (新しいepoch, PC時刻)"""
@@ -283,17 +340,21 @@ def update_firmware(hex_path, avrdude, output=print):
     return p.wait()
 
 
-def write_csv(path, start_dt, interval, recs):
-    """CSV (index, epoch, datetime, temp_C, hum_pct, co2_ppm) を書く"""
+def write_csv(path, start_dt, interval, recs, corr=None):
+    """CSV を書く。補正後の値 (temp_C, hum_pct, co2_ppm) と補正前の値 (*_raw) を並べる"""
+    corr = corr or Correction()
+    f2 = lambda v: "" if v is None else f"{v:.2f}"  # noqa: E731
+    f0 = lambda v: "" if v is None else str(v)      # noqa: E731
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm"])
+        w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm",
+                    "temp_raw_C", "hum_raw_pct", "co2_raw_ppm"])
         for i, (temp, hum, co2) in enumerate(recs):
             ts = start_dt + i * interval
             t, h, c = decode_record(temp, hum, co2)
             w.writerow([i, ts, fmt_time(ts),
-                        "" if t is None else f"{t:.2f}", "" if h is None else f"{h:.2f}",
-                        "" if c is None else c])
+                        f2(corr.apply("temp", t)), f2(corr.apply("hum", h)), f0(corr.apply("co2", c)),
+                        f2(t), f2(h), f0(c)])
 
 
 def count_failed(recs):
@@ -325,12 +386,29 @@ def default_csv_name(device_id, start_dt):
     return f"clogger_{device_id}_{datetime.fromtimestamp(start_dt).strftime('%Y%m%d_%H%M%S')}.csv"
 
 
-def fmt_measure(r):
-    """measure 応答 → 表示用文字列"""
+def fmt_measure(r, corr=None):
+    """measure 応答 → 表示用文字列。corr を渡すと補正後の値にする"""
+    if corr:
+        r = corr.apply_measure(r)
     s = f"{r['temp_C']:6.2f} °C  {r['hum_pct']:6.2f} %RH"
     if r.get("co2_ppm") is not None:
         s += f"  {r['co2_ppm']:5d} ppm"
     return s
+
+
+def run_frc(dev, ppm, samples=FRC_SAMPLES, progress=None, stop=None):
+    """CO2 の強制校正。samples 回計測してから co2_frc を送る。
+    @param progress progress(回数, samples, measure応答) を計測ごとに呼ぶ
+    @return co2_frc の応答 (correction = センサが適用した補正量 [ppm])。stop() が真なら None"""
+    for i in range(samples):
+        if stop and stop():
+            return None
+        r = dev.request("measure")
+        if r.get("co2_ppm") is None:
+            raise RuntimeError("この機器には CO2 センサがありません")
+        if progress:
+            progress(i + 1, samples, r)
+    return dev.request("co2_frc", {"ppm": ppm})
 
 
 # ============================================================
@@ -348,6 +426,9 @@ def cmd_info(dev, args):
     if s["count"] > 0:
         print(f"記録開始: {fmt_time(s['start_dt'])}")
     print(f"機器の時計: {fmt_time(s['epoch'])}")
+    corr = dev.get_correction()
+    if not corr.is_identity:
+        print("補正係数: " + "  ".join(f"{Correction.NAMES[k]} {corr.describe(k)}" for k in Correction.KEYS))
     b = dev.request("get_battery")
     print(f"電池電圧: {b['vbat_mV']/1000:.3f} V")
 
@@ -373,18 +454,19 @@ def cmd_read(dev, args):
         return
     print()
     out = args.output or default_csv_name(dev.request("get_id").get("device_id", ""), start_dt)
-    write_csv(out, start_dt, interval, recs)
+    write_csv(out, start_dt, interval, recs, dev.get_correction())
     print(f"CSV保存: {out}")
     print(f"{len(recs):,} 件 (計測失敗 {count_failed(recs)} 件)  {fmt_time(start_dt)} 〜 "
           f"{fmt_time(start_dt + (len(recs) - 1) * interval)}")
 
 
 def cmd_measure(dev, args):
-    print("温湿度(CO2)を連続表示します (保存しません)。Ctrl+C で終了。")
+    corr = None if args.raw else dev.get_correction()
+    print("温湿度(CO2)を連続表示します (保存しません)。" + ("補正前の値です。" if args.raw else "") + "Ctrl+C で終了。")
     i = 0
     try:
         while args.count == 0 or i < args.count:
-            print(fmt_measure(dev.request("measure")))
+            print(fmt_measure(dev.request("measure"), corr))
             i += 1
             time.sleep(args.wait)
     except KeyboardInterrupt:
@@ -439,6 +521,38 @@ def cmd_clock(dev, args):
         print(f"書き込むには: python clogger.py clock --set {new}")
 
 
+def cmd_correction(dev, args):
+    corr = dev.get_correction()
+    new = Correction(corr.to_params())
+    if args.reset:
+        new = Correction()
+    for k in Correction.KEYS:
+        v = getattr(args, k)
+        if v is not None:
+            new.coefs[k] = (v[0], v[1])
+    if new.coefs != corr.coefs:
+        corr = dev.set_correction(new)
+        print("補正係数を機器に保存しました。")
+    print("補正係数 (補正後 = a × 生値 + b):")
+    for k in Correction.KEYS:
+        print(f"  {Correction.NAMES[k]:4s} {corr.describe(k)}")
+
+
+def cmd_frc(dev, args):
+    print(f"CO2 の強制校正: 基準濃度 {args.ppm} ppm")
+    print("CO2 濃度が安定した場所 (外気なら風の弱い屋外や、窓を開けて換気した室内) に置き、人が近づかないこと。")
+    print(f"{FRC_SAMPLES} 回計測してから校正します (約1分)。Ctrl+C で中止。")
+
+    def progress(i, n, r):
+        print(f"\r  {i:2d}/{n}  {r['co2_ppm']:5d} ppm (校正前)", end="", flush=True)
+    try:
+        r = run_frc(dev, args.ppm, progress=progress)
+    except KeyboardInterrupt:
+        print("\n中止しました (校正していません)。")
+        return
+    print(f"\n校正しました。センサの補正量: {r['correction']:+d} ppm (センサ内部に保存)")
+
+
 def cmd_update(args):
     avr = args.avrdude or find_avrdude()
     if not avr:
@@ -466,6 +580,14 @@ def main():
     p = sub.add_parser("measure", help="温湿度(CO2)を連続表示 (保存しない)")
     p.add_argument("-n", "--count", type=int, default=0, help="回数 (0=無限)")
     p.add_argument("-w", "--wait", type=float, default=1.0, help="測定間隔 [秒]")
+    p.add_argument("--raw", action="store_true", help="補正前の値を表示")
+    p = sub.add_parser("correction", help="温度・湿度・CO2 の補正係数の表示・設定 (補正後 = a × 生値 + b)")
+    p.add_argument("--temp", type=float, nargs=2, metavar=("A", "B"), help="温度の a b")
+    p.add_argument("--hum", type=float, nargs=2, metavar=("A", "B"), help="湿度の a b")
+    p.add_argument("--co2", type=float, nargs=2, metavar=("A", "B"), help="CO2 の a b")
+    p.add_argument("--reset", action="store_true", help="すべて補正なし (a=1, b=0) に戻す")
+    p = sub.add_parser("frc", help="CO2 の強制校正 (センサ内部の校正を基準濃度に合わせる)")
+    p.add_argument("ppm", type=int, nargs="?", default=FRC_DEFAULT_PPM, help=f"基準の CO2 濃度 [ppm] (既定 {FRC_DEFAULT_PPM})")
     sub.add_parser("selftest", help="自己診断")
     sub.add_parser("clear", help="保存データの消去")
     p = sub.add_parser("clock", help="時計の補正値の表示・ずれの測定・補正値の設定")
@@ -495,7 +617,8 @@ def main():
         return 1
 
     handlers = {"info": cmd_info, "start": cmd_start, "read": cmd_read,
-                "measure": cmd_measure, "selftest": cmd_selftest, "clear": cmd_clear, "clock": cmd_clock}
+                "measure": cmd_measure, "selftest": cmd_selftest, "clear": cmd_clear, "clock": cmd_clock,
+                "correction": cmd_correction, "frc": cmd_frc}
     try:
         handlers[args.cmd](dev, args)
     except RuntimeError as e:

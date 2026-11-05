@@ -24,6 +24,9 @@ static bool s_flash_sleep = false;
 // CO2なし版は STCC4 を実装せず、R7・R8(0Ω)で温湿度センサ(SHT40)をホストのI2Cに直結する。
 static bool s_has_co2 = true;
 
+// 初期化してから成功した CO2 の single-shot 計測の回数 (FRC の前提条件の確認用。上限で止める)
+static uint8_t s_co2_shots = 0;
+
 // <editor-fold defaultstate="collapsed" desc="SHT4x (CO2なし版で直接読む温湿度センサ)">
 
 #define SHT4X_ADDRESS     0x44  // SHT40-AD1B
@@ -81,6 +84,7 @@ static void initSensor(void)
     STCC4_initialize();
     DELAY_milliseconds(10);
     s_has_co2 = STCC4_isConnected();
+    s_co2_shots = 0;
     s_sensor_inited = true; // 初期化済みとして記録
 }
 
@@ -152,6 +156,18 @@ bool Measurement_FactoryReset(void)
     return STCC4_performFactoryReset();
 }
 
+FrcResult Measurement_ForcedRecalibration(uint16_t ppm, int16_t *correction)
+{
+    Measurement_EnsureSensor();
+    if (!s_has_co2) return FRC_NO_CO2;
+    // single shot の後、センサは idle のまま (sleep にしない) なので、そのまま FRC を送れる
+    if (s_co2_shots < FRC_MIN_SAMPLES) return FRC_NOT_READY;
+    if (!STCC4_performForcedRecalibration(ppm, correction)) return FRC_FAILED;
+    if ((uint16_t)*correction == 0xFFFF) return FRC_FAILED; // センサが失敗を返した
+    s_co2_shots = 0; // 次の FRC にはまた 30 回の計測が要る
+    return FRC_OK;
+}
+
 bool Measurement_Sample(SensorData_t *out)
 {
     uint16_t co2;
@@ -163,6 +179,7 @@ bool Measurement_Sample(SensorData_t *out)
     if (s_has_co2) DELAY_milliseconds(STCC4_SINGLE_SHOT_MS);
     else           DELAY_milliseconds(SHT4X_MEASURE_MS);
     if (!sensorRead(&co2, &temp_c, &humi_pct)) return false;
+    if (s_has_co2 && s_co2_shots < 255) s_co2_shots++;
 
     // float → 固定小数点へ変換 (四捨五入)
     //  温度: ℃ * 100  (int16, 例 23.45℃ → 2345)

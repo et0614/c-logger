@@ -53,6 +53,22 @@ bool Measurement_StartConditioning(void);
 /// @return true:成功(センサが正常応答), false:I2C/CRC/応答エラー
 bool Measurement_FactoryReset(void);
 
+/// CO2 の強制校正 (FRC) の結果
+typedef enum {
+    FRC_OK,          // 成功
+    FRC_NO_CO2,      // CO2なし版
+    FRC_NOT_READY,   // 直前の計測が 30 回未満 (STCC4 の手順)
+    FRC_FAILED       // 通信エラー、またはセンサが失敗を返した
+} FrcResult;
+
+/// FRC に必要な、直前の連続計測の回数 (STCC4 datasheet: single shot 30 回以上)
+#define FRC_MIN_SAMPLES  30
+
+/// CO2 の強制校正 (FRC): センサの出力を基準の CO2 濃度 ppm に合わせる (センサ内部に保存される)。
+/// 安定した環境で Measurement_LiveSample を FRC_MIN_SAMPLES 回以上続けた直後に呼ぶこと。
+/// @param correction センサが適用した補正量 [ppm]
+FrcResult Measurement_ForcedRecalibration(uint16_t ppm, int16_t *correction);
+
 /// STCC4を(まだなら)初期化する。USB通信モードでは boot時に初期化していないため、
 /// live計測/セルフテストの前に呼ぶ。2回目以降は何もしない(ソフトリセットのbypass位相を避ける)。
 void Measurement_EnsureSensor(void);

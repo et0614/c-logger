@@ -1,119 +1,69 @@
-/* 
- * File:   EepromManager.h
+/*
+ * File:   eeprom_manager.h
  * Author: e.togashi
  *
- * Created on December 13, 2025, 10:51 AM
+ * EEPROM に保存する設定と校正値。
+ *
+ *   計測設定 (EM_settings)   : 記録間隔、記録開始日時。記録を始めるたびに書き換える
+ *   校正値   (EM_calib)      : 温度・湿度・CO2 の線形補正係数、時計の補正値。機器ごとに一度合わせる
+ *
+ * 2つのブロックに分け、それぞれに CRC を付ける (記録開始のたびに書く計測設定が壊れても、校正値は残る)。
+ * CRC が合わないブロックは既定値に戻す。EEPROM の並びを変えたら EM_LAYOUT_VERSION を上げる
+ * (起動時に全体を既定値で初期化し直す)。
  */
 
-#ifndef EEPROMMANAGER_H
-#define	EEPROMMANAGER_H
+#ifndef EEPROM_MANAGER_H
+#define EEPROM_MANAGER_H
 
-#ifdef	__cplusplus
+#ifdef __cplusplus
 extern "C" {
 #endif
 
 #include <stdint.h>
 #include <stdbool.h>
-    
-// 補正係数
+
+// 線形補正: 補正後 = a × 生値 + b
+// 小数を使わずに保存・送受信するため、固定小数点で持つ。
+#define EM_CORR_A_SCALE  100000L   // a ×100000 (100000 = 1.0。分解能 0.00001)
+#define EM_CORR_B_SCALE  100L      // b ×100 (温度 ℃、湿度 %RH、CO2 ppm。分解能 0.01)
+
 typedef struct {
-	uint16_t version; //バージョン
-	float dbtA; //乾球温度a
-	float dbtB; //乾球温度b
-	float hmdA; //相対湿度a
-	float hmdB; //相対湿度b
-	float glbA; //グローブ温度a
-	float glbB; //グローブ温度b
-	float luxA; //照度a
-	float luxB; //照度b
-	float velA; //風速a
-	float velB; //風速b
-	uint8_t crc; //CRC
-}CorrectionFactors;
+    int32_t a;   // 傾き ×EM_CORR_A_SCALE
+    int32_t b;   // 切片 ×EM_CORR_B_SCALE
+} LinearCorr;
 
-// 風速特性係数
-typedef struct{
-	uint16_t version; //バージョン
-    float vol0;
-	float ccA1;
-	float ccB1;
-	float ccA2;
-    float ccB2;
-    float vel_swt;
-	uint8_t crc; //CRC
-}VelocityCharacteristicCoefficients;
+// 計測設定
+typedef struct {
+    uint16_t interval;  // 記録間隔 [秒]
+    uint32_t start_dt;  // 記録開始日時 (UNIX秒)。各記録の時刻は start_dt + index × interval
+    uint8_t  crc;
+} MeasurementSettings;
 
-//計測設定
-typedef struct{
-	uint16_t version; //バージョン
-	bool start_auto; //自動測定開始
-	bool measure_th; //乾球温度の計測真偽
-	bool measure_glb; //グローブ温度の計測真偽
-	bool measure_vel; //風速の計測真偽
-	bool measure_ill; //照度の計測真偽
-	bool measure_AD1; //汎用AD1の計測真偽
-	bool measure_AD2; //汎用AD2の計測真偽
-	bool measure_AD3; //汎用AD3の計測真偽
-	bool measure_Prox; //近接センサの計測真偽
-	bool measure_co2; //CO2の計測真偽
-	unsigned int interval_th; //乾球温度の計測間隔[sec]
-	unsigned int interval_glb; //グローブ温度の計測間隔[sec]
-	unsigned int interval_vel; //風速の計測間隔[sec]
-	unsigned int interval_ill; //照度の計測間隔[sec]
-	unsigned int interval_AD1; //汎用AD1の計測間隔[sec]
-	unsigned int interval_AD2; //汎用AD2の計測間隔[sec]
-	unsigned int interval_AD3; //汎用AD3の計測間隔[sec]
-	unsigned int interval_Prox; //近接センサの計測間隔[sec]
-	unsigned int interval_co2; //CO2の計測間隔[sec]
-	uint32_t start_dt;	//計測開始日時
-	uint8_t crc; //CRC
-}MeasurementSettings;
+// 校正値
+// 温度・湿度・CO2 の補正はフラッシュの記録には適用しない (記録は生値)。PCツールが読み出すときに適用する。
+// 係数を後から直しても過去のデータに使え、生値も残る。
+typedef struct {
+    LinearCorr temp;       // 温度 [℃]
+    LinearCorr hum;        // 相対湿度 [%RH]
+    LinearCorr co2;        // CO2 [ppm]
+    int8_t     clock_ppm;  // 時計の補正値 [ppm] (正=水晶が速いので遅らせる)
+    uint8_t    crc;
+} Calibration;
 
-extern uint8_t EM_generationNumber;
+extern MeasurementSettings EM_settings;
+extern Calibration EM_calib;
 
-//補正係数
-extern CorrectionFactors EM_cFactors;
+// EEPROM を読み込む (起動時に1回)。未初期化・並びの変更・CRC 不一致なら既定値にする
+void EM_loadEEPROM(void);
 
-//風速特性係数
-extern VelocityCharacteristicCoefficients EM_vcCoefficients;
+// 計測設定を保存する
+void EM_saveSettings(void);
 
-//計測設定
-extern MeasurementSettings EM_mSettings;
+// 校正値を保存する
+void EM_saveCalibration(void);
 
-//名称
-extern char EM_clName[21];
-
-//EEPROMを読み込む
-void EM_loadEEPROM();
-
-//計測設定を保存する
-void EM_saveMeasurementSetting();
-
-//名称を書き込む
-void EM_saveName();
-
-//補正係数を保存する (v4 set_correction 用)
-void EM_saveCorrectionFactor();
-
-//データ世代番号を書き込む
-void EM_saveGenerationNumber();
-
-//時計の補正値[ppm]を読む (正=水晶が速い)。未設定なら0
-int8_t EM_loadClockCalib(void);
-
-//時計の補正値[ppm]を保存する
-void EM_saveClockCalib(int8_t ppm);
-
-//XBeeが初期化済か否かを取得する
-bool EM_isXBeeInitialized();
-
-//XBee初期化を記録する
-void EM_xbeeInitialized();
-
-
-#ifdef	__cplusplus
+#ifdef __cplusplus
 }
 #endif
 
-#endif	/* EEPROMMANAGER_H */
-
+#endif /* EEPROM_MANAGER_H */

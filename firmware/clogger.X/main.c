@@ -56,7 +56,7 @@ static uint8_t reset_timer = 0;
 static bool isLogging = false;
 
 //ソフトウェア時計 (UNIX epoch秒)。set_timeコマンドで設定し、PIT(1秒)毎にインクリメント。
-//各レコードの時刻は start_dt + index*interval_co2 で復元するため start_dt の基準に使う。
+//各レコードの時刻は start_dt + index*interval で復元するため start_dt の基準に使う。
 static uint32_t g_epoch = 0;
 
 //コンディショニング(長期未通電復帰用)の残り待ち秒数。start_logging時にセットし、PIT毎に
@@ -135,7 +135,7 @@ int main(void)
     RTC.CTRLA |= RTC_RUNSTDBY_bm;
 
     // 保存してある時計の補正値を RTC に設定する (set_clock_calib で設定)
-    Clock_SetCalib(EM_loadClockCalib());
+    Clock_SetCalib(EM_calib.clock_ppm);
 
     DELAY_milliseconds(100);
     sei();
@@ -296,7 +296,7 @@ void executeSecondlyTask(void)
     }
 
     // --- 計測 (非ブロッキング, 省電力のためLEDは点滅させない) -------------
-    // 計測周期 = interval_co2 秒。各区間の「末尾 CO2_AVG_WINDOW_SEC 秒」だけ連続 single-shot し、
+    // 計測周期 = interval 秒。各区間の「末尾 CO2_AVG_WINDOW_SEC 秒」だけ連続 single-shot し、
     // その CO2 平均を1レコードとして区間境界(sec==0)で保存する。温湿度は平均化せず窓内最後の値。
     //  ・窓開始(sec==win_start)で Begin、以降の中間tickで Sample、境界で Store のパイプライン。
     //   → single-shot の500ms待ちは常にスリープ中に消化される(USBブロック無し)。
@@ -304,7 +304,7 @@ void executeSecondlyTask(void)
     //  ・記録の時刻は「区間の終端」に対応する。start_dt は最初の保存時点で確定する。
     //  ・満杯(rec_latest>=MAX)に達したら計測を止める(ループ無し・消費電力も抑制)。
     static unsigned int sec = 0;
-    if (isLogging && EM_mSettings.interval_co2 > 0)
+    if (isLogging && EM_settings.interval > 0)
     {
         if (conditioning_wait > 0)
         {
@@ -315,7 +315,7 @@ void executeSecondlyTask(void)
         }
         else if (rec_latest < MAX_RECORD_COUNT) // 満杯でなければ計測を継続
         {
-            uint16_t N = EM_mSettings.interval_co2;
+            uint16_t N = EM_settings.interval;
             uint16_t w = (CO2_AVG_WINDOW_SEC < N) ? CO2_AVG_WINDOW_SEC : N; // 実効窓 = min(窓,間隔)
             uint16_t win_start = N - w;
 
@@ -326,8 +326,8 @@ void executeSecondlyTask(void)
                 {
                     // 1レコード目の時刻基準を「最初の保存(=区間終端)の今」で確定する。
                     // 以降の各レコード時刻は start_dt + index*interval で復元される。
-                    EM_mSettings.start_dt = g_epoch;
-                    EM_saveMeasurementSetting();
+                    EM_settings.start_dt = g_epoch;
+                    EM_saveSettings();
                     start_dt_set = true;
                 }
                 Measurement_AvgStore();

@@ -8,7 +8,8 @@ clogger.py の CLogger クラス(USB-CDC / JSONプロトコル)を使い、以�
   - 記録開始 (データ消去 + 時刻合わせ + 記録間隔)
   - データ読み出し (CSV)、データ消去
   - 温湿度 (CO2) のリアルタイム表示
-  - 自己診断
+  - 時計の補正、温度・湿度・CO2 の補正係数、CO2 の強制校正 (FRC)
+  - 自己診断、ファームウェア更新
 
 通信はすべてワーカースレッドで行い、結果はキュー経由でUIスレッドに渡す (tkinterはUIスレッド専用)。
 機器へのアクセスは Device.lock で直列化する (リアルタイム表示中に他の操作をしても衝突しない)。
@@ -138,6 +139,7 @@ class App(tk.Tk):
         self._build_data_tab()
         self._build_live_tab()
         self._build_clock_tab()
+        self._build_calib_tab()
         self._build_diag_tab()
         self._build_firmware_tab()
 
@@ -177,8 +179,10 @@ class App(tk.Tk):
         self.save_btn = ttk.Button(f, text="Save as CSV…", command=self._on_save_csv)
         self.save_btn.grid(row=0, column=0, sticky="w")
         ttk.Label(f, wraplength=540, justify="left", foreground="gray", text=(
-            "CSV columns: index, epoch, datetime, temp_C, hum_pct, co2_ppm\n"
-            "Failed measurements have empty values. co2_ppm is empty on the model without a CO2 sensor."
+            "CSV columns: index, epoch, datetime, temp_C, hum_pct, co2_ppm, temp_raw_C, hum_raw_pct, co2_raw_ppm\n"
+            "temp_C to co2_ppm are corrected with the coefficients stored in the device (Calibration tab); "
+            "*_raw are the values as recorded.\n"
+            "Failed measurements have empty values. CO2 columns are empty on the model without a CO2 sensor."
         )).grid(row=1, column=0, sticky="w", pady=10)
         ttk.Separator(f).grid(row=2, column=0, sticky="ew", pady=10)
         self.erase_btn = ttk.Button(f, text="Erase all data…", command=self._on_erase)
@@ -199,7 +203,8 @@ class App(tk.Tk):
         ttk.Label(f, textvariable=self.live_hum, font=big).grid(row=2, column=0, sticky="w")
         ttk.Label(f, textvariable=self.live_co2, font=big).grid(row=3, column=0, sticky="w")
         ttk.Label(f, wraplength=540, justify="left", foreground="gray", text=(
-            "Readings are not saved. Right after connecting, the sensor may read high "
+            "Readings are not saved. Values are corrected with the coefficients in the Calibration tab. "
+            "Right after connecting, the sensor may read high "
             "because the board is warmed by USB power.")).grid(row=4, column=0, sticky="w", pady=10)
         self.device_buttons.append(self.live_btn)
 
@@ -240,6 +245,55 @@ class App(tk.Tk):
         self.clock_new = None
         self.clock_stop_flag = False
         self.device_buttons += [self.clock_btn, self.clock_zero_btn]
+
+    def _build_calib_tab(self):
+        f = ttk.Frame(self.nb, padding=10)
+        self.nb.add(f, text="Calibration")
+        ttk.Label(f, wraplength=560, justify="left", text=(
+            "Linear correction of the readings: corrected = a × raw + b. "
+            "The coefficients are stored in the device. The device records raw values, and this tool applies the "
+            "correction when it shows or saves data, so changed coefficients also apply to data already recorded.")
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Label(f, text="a").grid(row=1, column=1, pady=(8, 0))
+        ttk.Label(f, text="b").grid(row=1, column=2, pady=(8, 0))
+        self.corr_vars = {}
+        rows = [("temp", "Temperature (°C)"), ("hum", "Humidity (%RH)"), ("co2", "CO2 (ppm)")]
+        for i, (k, label) in enumerate(rows):
+            ttk.Label(f, text=label).grid(row=2 + i, column=0, sticky="w", padx=(0, 8))
+            va, vb = tk.StringVar(value="1.00000"), tk.StringVar(value="0.00")
+            ttk.Entry(f, textvariable=va, width=10).grid(row=2 + i, column=1, padx=4, pady=2)
+            ttk.Entry(f, textvariable=vb, width=10).grid(row=2 + i, column=2, padx=4, pady=2)
+            self.corr_vars[k] = (va, vb)
+        btns = ttk.Frame(f)
+        btns.grid(row=5, column=0, columnspan=4, sticky="w", pady=6)
+        self.corr_save_btn = ttk.Button(btns, text="Save to device", command=self._on_corr_save)
+        self.corr_save_btn.pack(side="left")
+        self.corr_reset_btn = ttk.Button(btns, text="Reset (no correction)", command=self._on_corr_reset)
+        self.corr_reset_btn.pack(side="left", padx=6)
+        ttk.Label(f, foreground="gray", text="a: 0.8 to 1.2.  b: up to ±5 °C, ±15 %RH, ±2000 ppm.").grid(
+            row=6, column=0, columnspan=4, sticky="w")
+
+        ttk.Separator(f).grid(row=7, column=0, columnspan=4, sticky="ew", pady=10)
+        ttk.Label(f, text="CO2 forced recalibration (FRC)", font=("Segoe UI", 9, "bold")).grid(
+            row=8, column=0, columnspan=4, sticky="w")
+        ttk.Label(f, wraplength=560, justify="left", text=(
+            "Adjusts the CO2 sensor itself to a known CO2 concentration (stored in the sensor). "
+            "Place the C-Logger where the CO2 concentration is known and stable, for example outdoors "
+            "(about 420 ppm), and keep people away. The tool measures for about a minute, then recalibrates.")
+        ).grid(row=9, column=0, columnspan=4, sticky="w")
+        row = ttk.Frame(f)
+        row.grid(row=10, column=0, columnspan=4, sticky="w", pady=6)
+        ttk.Label(row, text="Reference CO2 (ppm):").pack(side="left")
+        self.frc_ppm = tk.StringVar(value=str(cl.FRC_DEFAULT_PPM))
+        ttk.Entry(row, textvariable=self.frc_ppm, width=7).pack(side="left", padx=6)
+        self.frc_btn = ttk.Button(row, text="Recalibrate…", command=self._on_frc)
+        self.frc_btn.pack(side="left", padx=6)
+        self.frc_stop_btn = ttk.Button(row, text="Stop", command=self._on_frc_stop, state="disabled")
+        self.frc_stop_btn.pack(side="left")
+        self.frc_result = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.frc_result).grid(row=11, column=0, columnspan=4, sticky="w")
+        self.frc_stop_flag = False
+        self.device_buttons += [self.corr_save_btn, self.corr_reset_btn, self.frc_btn]
 
     def _build_diag_tab(self):
         f = ttk.Frame(self.nb, padding=10)
@@ -359,6 +413,11 @@ class App(tk.Tk):
                     est = "-" if ppm is None else f"{ppm:+.1f} ppm"
                     self.status_var.set(f"Measuring clock drift… {el / 60:.1f} / {total / 60:.0f} min "
                                         f"(estimate {est})")
+                elif kind == "frcprog":
+                    i, n, r = payload
+                    self.progress.configure(mode="determinate", maximum=n, value=i)
+                    self.status_var.set(f"Measuring before recalibration… {i} / {n}  "
+                                        f"(CO2 {r['co2_ppm']} ppm before recalibration)")
                 elif kind == "progress":
                     n, total = payload
                     self.progress.configure(mode="determinate", maximum=max(total, 1), value=n)
@@ -377,6 +436,7 @@ class App(tk.Tk):
     def _task_finished(self):
         self.busy = False
         self.clock_stop_btn.configure(state="disabled")
+        self.frc_stop_btn.configure(state="disabled")
         self.progress.stop()
         self.progress.configure(mode="determinate", value=0)
         self._update_buttons()
@@ -443,6 +503,8 @@ class App(tk.Tk):
             self.live_btn.configure(state="normal")
         apply_ok = st == "normal" and self.clock_new is not None
         self.clock_apply_btn.configure(state="normal" if apply_ok else "disabled")
+        if st == "normal" and not self._has_co2():
+            self.frc_btn.configure(state="disabled")  # CO2なし版
         self.connect_btn.configure(state="disabled" if self.busy else "normal")
 
     # ------------------------------------------------------------------
@@ -453,16 +515,15 @@ class App(tk.Tk):
             return {"hello": d.request("hello"), "id": d.request("get_id").get("device_id"),
                     "status": d.request("get_status"), "battery": d.request("get_battery"),
                     "measure": d.request("measure"),  # センサ構成(CO2あり/なし)の判定に使う
-                    "clock": self._get_clock_calib(d)}
+                    "clock": d.request("get_clock_calib"), "corr": d.get_correction()}
         return self.device.call(f)
 
-    @staticmethod
-    def _get_clock_calib(d):
-        """時計の補正値 (FW 3.1.0 以降)。古いFWでは補正なしとして扱う"""
-        try:
-            return d.request("get_clock_calib")
-        except RuntimeError:
-            return {"ppm": 0, "unsupported": True}
+    def _has_co2(self):
+        return self.info.get("measure", {}).get("co2_ppm") is not None
+
+    def _corr(self):
+        return self.info.get("corr") or cl.Correction()
+
 
     def _refresh_info(self):
         self._run("Reading device information…", self._read_info, self._on_info)
@@ -481,8 +542,8 @@ class App(tk.Tk):
             self.info_vars["period"].set(f"{fmt_time(s['start_dt'])} – {fmt_time(end)}")
         else:
             self.info_vars["period"].set("(no data)")
-        has_co2 = info["measure"].get("co2_ppm") is not None
-        self.info_vars["sensor"].set("CO2, temperature, humidity" if has_co2 else "Temperature, humidity")
+        self.info_vars["sensor"].set("CO2, temperature, humidity" if self._has_co2() else "Temperature, humidity")
+        self._show_corr(info["corr"])
         self.clock_cur.set(f"Current correction: {info['clock']['ppm']:+d} ppm "
                            "(positive = the crystal runs fast and is slowed down)")
         self.interval_var.set(s["interval"])
@@ -552,9 +613,11 @@ class App(tk.Tk):
         self._stop_live()
 
         def work():
-            start_dt, interval, recs = self.device.call(
-                lambda d: d.download(lambda n, total: self.q.put(("progress", None, (n, total)))))
-            cl.write_csv(path, start_dt, interval, recs)
+            def f(d):
+                corr = d.get_correction()
+                return corr, d.download(lambda n, total: self.q.put(("progress", None, (n, total))))
+            corr, (start_dt, interval, recs) = self.device.call(f)
+            cl.write_csv(path, start_dt, interval, recs, corr)
             return len(recs), cl.count_failed(recs)
 
         def done(r):
@@ -611,6 +674,7 @@ class App(tk.Tk):
     def _on_live_result(self, r):
         if not self.live_on:
             return
+        r = self._corr().apply_measure(r)
         self.live_temp.set(f"{r['temp_C']:6.2f} °C")
         self.live_hum.set(f"{r['hum_pct']:6.2f} %RH")
         co2 = r.get("co2_ppm")
@@ -661,6 +725,76 @@ class App(tk.Tk):
 
         self._run("Setting clock correction…", lambda: self.device.call(
             lambda d: d.request("set_clock_calib", {"ppm": ppm})), done)
+
+    # ------------------------------------------------------------------
+    # 補正係数・CO2 の強制校正
+    # ------------------------------------------------------------------
+    def _show_corr(self, corr):
+        for k, (va, vb) in self.corr_vars.items():
+            a, b = corr.coefs[k]
+            va.set(f"{a:.5f}")
+            vb.set(f"{b:.2f}")
+
+    def _on_corr_save(self):
+        corr = cl.Correction()
+        try:
+            for k, (va, vb) in self.corr_vars.items():
+                corr.coefs[k] = (float(va.get()), float(vb.get()))
+        except ValueError:
+            messagebox.showwarning(APP_TITLE, "Enter numbers for a and b.")
+            return
+        self._save_corr(corr)
+
+    def _on_corr_reset(self):
+        if messagebox.askyesno(APP_TITLE, "Reset all coefficients to no correction (a = 1, b = 0)?"):
+            self._save_corr(cl.Correction())
+
+    def _save_corr(self, corr):
+        def done(saved):
+            self.info["corr"] = saved
+            self._show_corr(saved)
+            self.status_var.set("Correction coefficients saved to the device.")
+
+        self._run("Saving correction coefficients…",
+                  lambda: self.device.call(lambda d: d.set_correction(corr)), done)
+
+    def _on_frc(self):
+        try:
+            ppm = int(self.frc_ppm.get())
+        except ValueError:
+            ppm = 0
+        if not 300 <= ppm <= 5000:
+            messagebox.showwarning(APP_TITLE, "Reference CO2 must be 300–5000 ppm.")
+            return
+        if not messagebox.askyesno(APP_TITLE, (
+                f"Recalibrate the CO2 sensor to {ppm} ppm?\n\n"
+                "The C-Logger must be in air of this concentration, and the reading must be stable. "
+                f"The tool measures {cl.FRC_SAMPLES} times (about a minute) first.")):
+            return
+        self._stop_live()
+        self.frc_stop_flag = False
+        self.frc_stop_btn.configure(state="normal")
+        self.frc_result.set("")
+
+        def work():
+            return self.device.call(lambda d: cl.run_frc(
+                d, ppm, progress=lambda i, n, r: self.q.put(("frcprog", None, (i, n, r))),
+                stop=lambda: self.frc_stop_flag))
+
+        def done(r):
+            if r is None:
+                self.frc_result.set("Stopped. The sensor was not recalibrated.")
+                self.status_var.set("Recalibration stopped.")
+                return
+            self.frc_result.set(f"Recalibrated to {r['ppm']} ppm. Correction applied by the sensor: "
+                                f"{r['correction']:+d} ppm.")
+            self.status_var.set("CO2 sensor recalibrated.")
+
+        self._run("Measuring before recalibration…", work, done)
+
+    def _on_frc_stop(self):
+        self.frc_stop_flag = True
+        self.frc_stop_btn.configure(state="disabled")
 
     # ------------------------------------------------------------------
     # 自己診断

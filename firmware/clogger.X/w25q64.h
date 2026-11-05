@@ -39,7 +39,7 @@ extern "C" {
 // データ構造体の定義 (6 bytes, packed)
 //
 // タイムスタンプは保持しない。計測開始日時(start_dt)と計測間隔(interval)は
-// EEPROM(EM_mSettings)に別途記録し、各レコードの時刻は
+// EEPROM(EM_settings)に別途記録し、各レコードの時刻は
 //   時刻 = start_dt + (レコードindex) * interval
 // で復元する。
 //
