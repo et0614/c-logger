@@ -31,13 +31,16 @@ static USB_CDC_LINE_CODING_t s_lineCoding __attribute__((aligned(2))) = {
 // 【シリアル番号】MCC の文字列記述子はシリアル番号が固定 (STRING_SERIAL = "1") で、全台が同じになる。
 // Windows は VID・PID・シリアル番号で機器を見分けるので、同じだと2台を同時につなげない。
 // 生成コードは変えず、文字列記述子の並び (メーカー名 → 製品名 → シリアル番号) をここに持ち直して、
-// シリアル番号だけ機体ID (8桁の16進) にする。スタックは bLength をたどって次の文字列を探すので、
+// 製品名を "C-Logger" に、シリアル番号を機体ID (8桁の16進) にする。スタックは bLength をたどって次の文字列を探すので、
 // 3つを隙間なく並べること。
+// 製品名。MCC の既定は "CDC Class Demo"。ブラウザの機器の選択画面などに出るので機器の名前にする。
+#define PRODUCT_NAME  L"C-Logger"
+
 static struct {
     USB_DESCRIPTOR_HEADER_t manufacturer_header;
     wchar_t manufacturer[DESCRIPTOR_STRING_LENGTH(STRING_MANUFACTURER)];
     USB_DESCRIPTOR_HEADER_t product_header;
-    wchar_t product[DESCRIPTOR_STRING_LENGTH(STRING_PRODUCT)];
+    wchar_t product[DESCRIPTOR_STRING_LENGTH(PRODUCT_NAME)];
     USB_DESCRIPTOR_HEADER_t serial_header;
     wchar_t serial[8];
 } s_strings = {
@@ -50,7 +53,7 @@ static struct {
         .bLength = sizeof(s_strings.product) + sizeof(USB_DESCRIPTOR_HEADER_t),
         .bDescriptorType = USB_DESCRIPTOR_TYPE_STRING,
     },
-    .product = STRING_PRODUCT,
+    .product = PRODUCT_NAME,
     .serial_header = {
         .bLength = sizeof(s_strings.serial) + sizeof(USB_DESCRIPTOR_HEADER_t),
         .bDescriptorType = USB_DESCRIPTOR_TYPE_STRING,

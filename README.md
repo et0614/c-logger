@@ -20,6 +20,7 @@
 
 ```
 docs/
+  index.html            ブラウザ版の操作ページ（Web Serial。GitHub Pages で公開する）
   manual.md             取扱説明書
   images/               基板の外観 (3d_top/3d_bottom) とレイアウト (pcb_top/pcb_bottom)
 hardware/
@@ -38,13 +39,22 @@ software/               PCツール: clogger_gui.py (GUI)、clogger.py (コマ�
 ## バージョン
 
 - 基板: 3.1（シルク表記「Version 3.1」）。修正ごとに 3.1, 3.2 … と上げる。履歴は `hardware/fab/README.md`
-- ファームウェア: 3.4.1（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
+- ファームウェア: 3.4.2（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
 
 ## 配布 (GitHub Releases)
 
 `firmware/release/clogger.hex` に配布するファームウェアを置いてコミットし、`v1`, `v2` … のタグを push すると、
 GitHub Actions が `CLogger_vX.Y.Z.zip`（CLogger.exe（avrdude 同梱）、ファームウェア、avrdude のライセンス、README）を作って Releases に登録する。
 手順は [firmware/release/README.md](firmware/release/README.md)。手元で作るなら `python software/make_release.py --avrdude <avrdude のフォルダ>`。
+
+## ブラウザ版の操作ページ
+
+`docs/index.html` は、ブラウザから USB の仮想 COM ポートを直接開いて操作するページ（Web Serial）。インストール不要で、PCツールの GUI 版と同じことができる（機器情報、記録の開始、CSV の保存とデータの消去、ライブ表示、補正係数、CO2 の校正、時計の補正、自己診断）。表示は日本語と英語を切り替えられる。通信方式と CSV の形式は `software/clogger.py` と同じ。HTML 1枚で、外部のライブラリは使っていない。
+
+- 動くブラウザ: パソコンの Chrome・Edge。Firefox・Safari・iPhone/iPad では動かない。
+- https か localhost でしか動かない。公開は GitHub Pages（リポジトリの Settings → Pages で、Branch を `main`、フォルダを `/docs` にする）。手元で試すなら `python -m http.server 8765 --directory docs` の後に `http://localhost:8765` を開く。
+- ファームウェアの更新はできない（ブートローダは HID で、avrdude に任せている。PCツールを使う）。
+- 時計のずれの測定は、ページを前面に出したまま行う（裏に回すとブラウザがタイマーを間引く）。
 
 ## PCツールの exe 化
 
@@ -85,6 +95,7 @@ GitHub Actions が `CLogger_vX.Y.Z.zip`（CLogger.exe（avrdude 同梱）、フ�
   - USB 通信中だけウォッチドッグ（約8秒）を有効にする。待機と記録では使わない。
   - 調査用に `get_diag`（USB を作り直した回数と最後のエラーコード、ウォッチドッグの回数、抜けの確認・バスリセット・Suspend・Resume・クラス要求の回数。電池と USB の両方を外すまで残る）。`clogger.py info` で表示する。リセット要因（`rst`）はブートローダが先に消すので常に 0。
   - 3.3.9 でも、つないだままポートを開くのに30秒かかることがある（約175回に2回）。その間、本体はリセットも再接続もしていない。原因は未特定で、再現したら `get_diag` の回数の変化で切り分ける。
+- **USB の製品名**（3.4.2）: 「C-Logger」にする（MCC の既定は「CDC Class Demo」。ブラウザの機器の選択画面に出る）。シリアル番号と同じく `usb_comm.c` で差し替えている。
 - **USB のシリアル番号**（3.4.0）: 機体 ID（`get_id` と同じ8桁の16進）にする。MCC の既定は全台「1」で、Windows は同じ機器と見なすので2台を同時につなげなかった。生成コードは変えず、`usb_comm.c` に文字列記述子を持ち直している（`USB_Comm_SetSerial`）。シリアル番号が変わるので、3.4.0 にした後は Windows が新しい機器として認識し、COM ポート番号が機体ごとに変わる。
 - **時計**（3.4.0）: 秒は PIT の割り込みの中で数える。メインループで数えると、データの読み出しや消去でループが1秒以上ふさがったときに取りこぼす。
 - **データの消去**（3.4.0）: 使用済みの領域を末尾から先頭へ消す。件数は「先頭から連続した有効レコード」を二分探索で数えるので、先頭から消すと、途中で電源が落ちた後に消し残しを有効と数えてしまう。64KB ブロックがまるごと使用済みならブロック消去を使い（満杯で約3分 → 約40秒）、待ちの間も USB のポーリングを続ける（`W25_SetBusyHook`）。
