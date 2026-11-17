@@ -9,6 +9,9 @@
 # Claudeファイル
 .claude
 
+# 公開しないもの (製造費の見積もり)
+hardware/cost_estimate*.xlsx
+
 # ユーザー固有の設定
 **/nbproject/private/
 

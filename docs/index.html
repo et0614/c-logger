@@ -3,352 +3,188 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>C-Logger</title>
+<title>C-Logger — 温湿度・CO2 データロガー</title>
+<meta name="description" content="ボタン電池1個で動く、26mm 角の温湿度・CO2 データロガー。USB でつないでブラウザから操作できます。">
 <style>
   :root {
     --bg: #f5f6f4; --card: #ffffff; --ink: #1d2422; --sub: #5d6a66; --line: #d9dfdc;
-    --accent: #0f7a5c; --accent-ink: #ffffff; --warn: #a8480f; --warn-bg: #fdf1e7; --ok-bg: #e8f5ef;
+    --accent: #0f7a5c; --accent-ink: #ffffff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #141917; --card: #1d2422; --ink: #e8eeeb; --sub: #9aa8a3; --line: #323c39;
-      --accent: #3fbf96; --accent-ink: #0c1512; --warn: #f0a26b; --warn-bg: #33241a; --ok-bg: #1b2f28;
+      --accent: #3fbf96; --accent-ink: #0c1512;
     }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
-    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", Meiryo, sans-serif;
+    font: 16px/1.7 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", Meiryo, sans-serif;
   }
-  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  h1 { font-size: 26px; margin: 0; letter-spacing: .02em; }
-  .head-links { display: flex; align-items: center; gap: 14px; font-size: 14px; }
-  .head-links a { color: var(--sub); }
-  .lead { color: var(--sub); margin: 4px 0 20px; font-size: 14px; }
-  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-top: 16px; }
-  h2 { font-size: 17px; margin: 0 0 12px; }
-  h3 { font-size: 15px; margin: 22px 0 10px; padding-top: 16px; border-top: 1px solid var(--line); }
-  button {
-    font: inherit; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--line);
+  main { max-width: 860px; margin: 0 auto; padding: 20px 16px 56px; }
+  .top { display: flex; align-items: center; justify-content: space-between; }
+  .brand { font-weight: 700; letter-spacing: .02em; }
+  button.small {
+    font: inherit; font-size: 14px; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--line);
     background: var(--card); color: var(--ink); cursor: pointer;
   }
-  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
-  button.small { padding: 4px 12px; font-size: 14px; }
-  button:disabled { opacity: .45; cursor: default; }
-  input[type=number], select {
-    font: inherit; width: 7.5em; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
-    background: var(--bg); color: var(--ink);
+  .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 28px; align-items: center; margin-top: 28px; }
+  .hero h1 { font-size: 40px; line-height: 1.2; margin: 0 0 6px; letter-spacing: .01em; }
+  .hero .kind { color: var(--accent); font-weight: 600; margin: 0 0 14px; }
+  .hero p { margin: 0 0 20px; color: var(--sub); }
+  .hero img { width: 100%; height: auto; border-radius: 12px; background: #fff; border: 1px solid var(--line); }
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; }
+  a.btn {
+    display: inline-block; padding: 10px 20px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink); text-decoration: none;
   }
-  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .row + .row { margin-top: 12px; }
-  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 20px; margin: 0; }
-  dt { color: var(--sub); }
-  dd { margin: 0; font-variant-numeric: tabular-nums; }
-  .note { color: var(--sub); font-size: 14px; margin: 10px 0 0; }
-  .msg { border-radius: 8px; padding: 10px 14px; margin-top: 16px; font-size: 15px; }
-  .msg.warn { background: var(--warn-bg); color: var(--warn); }
-  .msg.ok { background: var(--ok-bg); }
-  progress { width: 100%; height: 10px; margin-top: 12px; }
-  [hidden] { display: none !important; }
-
-  .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 20px; border-bottom: 1px solid var(--line); }
-  .tab { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; padding: 8px 14px; color: var(--sub); }
-  .tab[aria-selected=true] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
-  .panel { margin-top: 0; border-top: 0; border-radius: 0 0 10px 10px; }
-
-  .live { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 14px; }
-  .live > div { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
-  .live .label { color: var(--sub); font-size: 14px; }
-  .live .value { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.3; }
-  .live .unit { font-size: 15px; font-weight: 400; color: var(--sub); margin-left: 4px; }
-  .live svg { width: 100%; height: 44px; display: block; margin-top: 6px; }
-  .live polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-
-  table.coef { border-collapse: collapse; }
-  table.coef th { text-align: left; font-weight: 400; color: var(--sub); padding: 4px 14px 4px 0; font-size: 14px; }
-  table.coef td { padding: 4px 14px 4px 0; }
-  pre.result { margin: 12px 0 0; padding: 10px 14px; background: var(--bg); border-radius: 8px; font: 14px/1.7 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+  a.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .hint { font-size: 14px; color: var(--sub); margin-top: 10px; }
+  h2 { font-size: 21px; margin: 52px 0 16px; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .features > div { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .features h3 { font-size: 16px; margin: 0 0 4px; }
+  .features p { margin: 0; color: var(--sub); font-size: 15px; }
+  ol.steps { list-style: none; counter-reset: step; padding: 0; margin: 0; display: grid; gap: 12px; }
+  ol.steps li {
+    counter-increment: step; background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 18px 14px 58px; position: relative;
+  }
+  ol.steps li::before {
+    content: counter(step); position: absolute; left: 16px; top: 14px; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-ink); font-weight: 700; text-align: center; line-height: 28px;
+  }
+  ol.steps b { display: block; }
+  ol.steps span { color: var(--sub); font-size: 15px; }
+  table { border-collapse: collapse; width: 100%; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 16px; border-top: 1px solid var(--line); vertical-align: top; }
+  tr:first-child th, tr:first-child td { border-top: 0; }
+  th { font-weight: 400; color: var(--sub); width: 9.5em; white-space: nowrap; }
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--sub); font-size: 14px; display: flex; gap: 18px; flex-wrap: wrap; }
+  footer a { color: var(--sub); }
+  @media (max-width: 640px) {
+    .hero { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 32px; }
+  }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <h1>C-Logger</h1>
-    <div class="head-links">
-      <a href="https://github.com/et0614/c-logger/blob/main/docs/manual.md" target="_blank" rel="noopener" data-i18n="manual"></a>
-      <button id="langBtn" class="small"></button>
-    </div>
-  </header>
-  <p class="lead" data-i18n="lead"></p>
-
-  <div id="unsupported" class="msg warn" hidden data-i18n="unsupported"></div>
-
-  <section id="connectBox">
-    <div class="row">
-      <button id="connectBtn" class="primary"></button>
-      <span id="connState"></span>
-    </div>
-  </section>
-
-  <div id="message" class="msg" hidden></div>
-
-  <div id="app" hidden>
-    <section>
-      <h2 data-i18n="info_title"></h2>
-      <dl>
-        <dt data-i18n="info_id"></dt><dd id="iId"></dd>
-        <dt data-i18n="info_fw"></dt><dd id="iFw"></dd>
-        <dt data-i18n="info_sensor"></dt><dd id="iSensor"></dd>
-        <dt data-i18n="info_now"></dt><dd id="iNow"></dd>
-        <dt data-i18n="info_count"></dt><dd id="iCount"></dd>
-        <dt data-i18n="info_period"></dt><dd id="iPeriod"></dd>
-        <dt data-i18n="info_batt"></dt><dd id="iBatt"></dd>
-      </dl>
-    </section>
-
-    <div class="tabs" role="tablist">
-      <button class="tab" role="tab" data-tab="log" data-i18n="tab_log"></button>
-      <button class="tab" role="tab" data-tab="data" data-i18n="tab_data"></button>
-      <button class="tab" role="tab" data-tab="live" data-i18n="tab_live"></button>
-      <button class="tab" role="tab" data-tab="calib" data-i18n="tab_calib"></button>
-      <button class="tab" role="tab" data-tab="clock" data-i18n="tab_clock"></button>
-      <button class="tab" role="tab" data-tab="diag" data-i18n="tab_diag"></button>
-    </div>
-
-    <!-- 記録 -->
-    <section class="panel" data-panel="log">
-      <div class="row">
-        <label for="interval" data-i18n="log_interval"></label>
-        <input id="interval" type="number" min="1" max="3600" step="1" value="60">
-        <span data-i18n="sec"></span>
-        <span id="capacity" class="note" style="margin:0"></span>
-      </div>
-      <div class="row"><button id="startBtn" class="primary" data-i18n="log_start"></button></div>
-      <p class="note" data-i18n="log_note"></p>
-    </section>
-
-    <!-- データ -->
-    <section class="panel" data-panel="data" hidden>
-      <div class="row">
-        <button id="saveBtn" class="primary" data-i18n="data_save"></button>
-        <button id="eraseBtn" data-i18n="data_erase"></button>
-        <span id="saveState"></span>
-      </div>
-      <progress id="saveProg" value="0" max="1" hidden></progress>
-      <p class="note" data-i18n="data_note"></p>
-    </section>
-
-    <!-- ライブ表示 -->
-    <section class="panel" data-panel="live" hidden>
-      <div class="row">
-        <button id="liveBtn" class="primary"></button>
-        <span class="note" style="margin:0" data-i18n="live_note"></span>
-      </div>
-      <div class="live">
-        <div><div class="label" data-i18n="temp"></div><div class="value"><span id="lvT">—</span><span class="unit">℃</span></div><svg id="spT" viewBox="0 0 200 40" preserveAspectRatio="none"><polyline/></svg></div>
-        <div><div class="label" data-i18n="hum"></div><div class="value"><span id="lvH">—</span><span class="unit">%</span></div><svg id="spH" viewBox="0 0 200 40" preserveAspectRatio="none"><polyline/></svg></div>
-        <div id="lvCbox"><div class="label">CO2</div><div class="value"><span id="lvC">—</span><span class="unit">ppm</span></div><svg id="spC" viewBox="0 0 200 40" preserveAspectRatio="none"><polyline/></svg></div>
-      </div>
-    </section>
-
-    <!-- 校正 -->
-    <section class="panel" data-panel="calib" hidden>
-      <h2 data-i18n="corr_title"></h2>
-      <p class="note" style="margin:0 0 10px" data-i18n="corr_formula"></p>
-      <table class="coef">
-        <tr><th></th><th>a</th><th>b</th></tr>
-        <tr><td data-i18n="temp"></td><td><input id="cTa" type="number" step="0.00001"></td><td><input id="cTb" type="number" step="0.01"> ℃</td></tr>
-        <tr><td data-i18n="hum"></td><td><input id="cHa" type="number" step="0.00001"></td><td><input id="cHb" type="number" step="0.01"> %</td></tr>
-        <tr id="cCrow"><td>CO2</td><td><input id="cCa" type="number" step="0.00001"></td><td><input id="cCb" type="number" step="0.01"> ppm</td></tr>
-      </table>
-      <div class="row" style="margin-top:14px">
-        <button id="corrSaveBtn" class="primary" data-i18n="corr_save"></button>
-        <button id="corrResetBtn" data-i18n="corr_reset"></button>
-      </div>
-      <p class="note" data-i18n="corr_note"></p>
-
-      <div id="frcBox">
-        <h3 data-i18n="frc_title"></h3>
-        <div class="row">
-          <label for="frcPpm" data-i18n="frc_ref"></label>
-          <input id="frcPpm" type="number" min="300" max="5000" step="1" value="420"> ppm
-          <button id="frcBtn" class="primary"></button>
-        </div>
-        <progress id="frcProg" value="0" max="40" hidden></progress>
-        <pre id="frcResult" class="result" hidden></pre>
-        <p class="note" data-i18n="frc_note"></p>
-      </div>
-    </section>
-
-    <!-- 時計 -->
-    <section class="panel" data-panel="clock" hidden>
-      <dl><dt data-i18n="clock_cur"></dt><dd id="clockCur"></dd></dl>
-      <div class="row" style="margin-top:14px">
-        <label for="clockMin" data-i18n="clock_dur"></label>
-        <select id="clockMin">
-          <option value="10">10</option><option value="30">30</option><option value="60" selected>60</option><option value="120">120</option>
-        </select>
-        <span data-i18n="min"></span>
-        <button id="clockBtn" class="primary"></button>
-      </div>
-      <progress id="clockProg" value="0" max="1" hidden></progress>
-      <pre id="clockResult" class="result" hidden></pre>
-      <div class="row" style="margin-top:14px">
-        <button id="clockApplyBtn" data-i18n="clock_apply" disabled></button>
-        <button id="clockResetBtn" data-i18n="clock_reset"></button>
-      </div>
-      <p class="note" data-i18n="clock_note"></p>
-    </section>
-
-    <!-- 診断 -->
-    <section class="panel" data-panel="diag" hidden>
-      <div class="row"><button id="diagBtn" class="primary" data-i18n="diag_run"></button></div>
-      <pre id="diagResult" class="result" hidden></pre>
-      <p class="note" data-i18n="diag_note"></p>
-    </section>
+  <div class="top">
+    <span class="brand">C-Logger</span>
+    <button id="langBtn" class="small"></button>
   </div>
+
+  <div class="hero">
+    <div>
+      <h1>C-Logger</h1>
+      <p class="kind" data-i18n="kind"></p>
+      <p data-i18n="lead"></p>
+      <div class="actions">
+        <a class="btn primary" href="app/" data-i18n="open_app"></a>
+        <a class="btn" href="manual.html" data-i18n="manual"></a>
+      </div>
+      <p class="hint" data-i18n="app_hint"></p>
+    </div>
+    <img src="images/3d_top.png" alt="C-Logger" width="1700" height="1260">
+  </div>
+
+  <h2 data-i18n="feat_title"></h2>
+  <div class="features">
+    <div><h3 data-i18n="f1_t"></h3><p data-i18n="f1_d"></p></div>
+    <div><h3 data-i18n="f2_t"></h3><p data-i18n="f2_d"></p></div>
+    <div><h3 data-i18n="f3_t"></h3><p data-i18n="f3_d"></p></div>
+    <div><h3 data-i18n="f4_t"></h3><p data-i18n="f4_d"></p></div>
+    <div><h3 data-i18n="f5_t"></h3><p data-i18n="f5_d"></p></div>
+    <div><h3 data-i18n="f6_t"></h3><p data-i18n="f6_d"></p></div>
+  </div>
+
+  <h2 data-i18n="how_title"></h2>
+  <ol class="steps">
+    <li><b data-i18n="s1_t"></b><span data-i18n="s1_d"></span></li>
+    <li><b data-i18n="s2_t"></b><span data-i18n="s2_d"></span></li>
+    <li><b data-i18n="s3_t"></b><span data-i18n="s3_d"></span></li>
+    <li><b data-i18n="s4_t"></b><span data-i18n="s4_d"></span></li>
+  </ol>
+
+  <h2 data-i18n="spec_title"></h2>
+  <table>
+    <tr><th data-i18n="sp_kind"></th><td data-i18n="sp_kind_v"></td></tr>
+    <tr><th data-i18n="sp_sensor"></th><td data-i18n="sp_sensor_v"></td></tr>
+    <tr><th data-i18n="sp_interval"></th><td data-i18n="sp_interval_v"></td></tr>
+    <tr><th data-i18n="sp_mem"></th><td data-i18n="sp_mem_v"></td></tr>
+    <tr><th data-i18n="sp_power"></th><td data-i18n="sp_power_v"></td></tr>
+    <tr><th data-i18n="sp_usb"></th><td data-i18n="sp_usb_v"></td></tr>
+    <tr><th data-i18n="sp_size"></th><td data-i18n="sp_size_v"></td></tr>
+    <tr><th data-i18n="sp_soft"></th><td data-i18n="sp_soft_v"></td></tr>
+  </table>
+
+  <footer>
+    <a href="app/" data-i18n="open_app"></a>
+    <a href="manual.html" data-i18n="manual"></a>
+  </footer>
 </main>
 
 <script>
 "use strict";
-
-// ------------------------------------------------------------
-// 表示の文言 (日本語 / English)
-// ------------------------------------------------------------
 const TEXT = {
   ja: {
-    manual: "取扱説明書",
-    lead: "温湿度・CO2 データロガーの操作ページです。USB でつないで、記録の開始とデータの保存ができます。",
-    unsupported: "このブラウザでは使えません。パソコンの Chrome または Edge で開いてください。",
-    connect: "接続", disconnect: "切断",
-    conn_hint: "本体を USB でつないで「接続」を押し、一覧から C-Logger を選んでください。",
-    connecting: "接続しています…", connected: "接続しました。",
-    conn_failed: "接続できませんでした。{e}　ほかのソフトが同じ機器を使っていないか確かめ、USB を挿し直してからもう一度お試しください。",
-    unplugged: "USB が抜かれました。", lost: "接続が切れました",
-    not_clogger: "C-Logger ではない機器です", no_response: "{cmd}: 応答がありません",
-    info_title: "機器の情報", info_id: "機体 ID", info_fw: "ファームウェア", info_sensor: "センサ",
-    info_now: "現在の値", info_count: "保存データ", info_period: "記録期間", info_batt: "電池電圧",
-    sensor_co2: "CO2・温度・湿度", sensor_th: "温度・湿度", sensor_ng: "計測できません",
-    count_fmt: "{n} 件", count_interval: "（記録間隔 {s} 秒）",
-    tab_log: "記録", tab_data: "データ", tab_live: "ライブ表示", tab_calib: "校正", tab_clock: "時計", tab_diag: "診断",
-    sec: "秒", min: "分", temp: "温度", hum: "湿度",
-    log_interval: "記録間隔", log_start: "記録を開始",
-    log_note: "本体の時計をこのパソコンの時刻に合わせ、保存済みのデータを消去してから記録を始めます。開始すると本体は USB から切り離されます。ケーブルを抜いて設置してください。",
-    capacity: "メモリがいっぱいになるまで {d}",
-    dur_days: "約{v}日", dur_hours: "約{v}時間", dur_min: "約{v}分",
-    interval_bad: "記録間隔は 1〜3600 秒の整数で入力してください。",
-    start_confirm_erase: "保存済みの {n} 件は消去されます。", start_confirm: "記録間隔 {s} 秒で記録を開始しますか？",
-    erasing: "保存済みのデータを消去しています…", starting: "記録を開始しています…",
-    started: "記録を開始しました。USB ケーブルを抜いて設置してください。",
-    started_co2: "CO2 は最初の約1時間、センサの暖機中のため精度が出ていないことがあります。",
-    started_read: "読み出すときは、USB でつないでこのページで「接続」を押してください。",
-    start_failed: "記録を開始できませんでした。{e}",
-    data_save: "CSV で保存", data_erase: "データを消去",
-    data_note: "保存しても本体のデータは消えません。次に記録を開始したとき、または「データを消去」で消えます。",
-    no_data: "保存するデータがありません。", reading: "読み出し中… {a} / {b} 件",
-    saved: "{n} 件を {f} に保存しました。", saved_failed: "計測に失敗した記録が {n} 件あります（空欄になります）。",
-    save_failed: "保存できませんでした。{e}",
-    dump_header: "データの読み出しに失敗しました (ヘッダ)", dump_short: "データの読み出しが途中で止まりました ({a}/{b} バイト)",
-    erase_confirm: "保存済みの {n} 件をすべて消去します。元に戻せません。よろしいですか？",
-    erased: "データを消去しました。", erase_failed: "消去できませんでした。{e}",
-    live_start: "開始", stop: "停止", live_note: "1秒ごとに測って表示します（保存はしません）。",
-    live_failed: "計測できませんでした。{e}",
-    corr_title: "測定値の補正", corr_formula: "補正後の値 = a × 補正前の値 + b",
-    corr_save: "本体に保存", corr_reset: "補正なしに戻す",
-    corr_note: "設定できる範囲: a は 0.8〜1.2、b は温度 ±5℃、湿度 ±15%、CO2 ±2000 ppm。本体には補正前の値を記録し、表示と CSV 保存のときに補正します。",
-    corr_bad: "補正係数が範囲の外です。a は 0.8〜1.2、b は温度 ±5、湿度 ±15、CO2 ±2000 までです。",
-    corr_saved: "補正係数を本体に保存しました。", corr_failed: "保存できませんでした。{e}",
-    frc_title: "CO2 センサの校正", frc_ref: "基準の CO2 濃度", frc_run: "校正する",
-    frc_note: "濃度が分かっていて安定した場所（外気なら約 420 ppm）に置き、人が近づかないようにしてから行ってください。約1分間（40回）計測した後に校正します。誤った濃度で校正すると、以後の値がすべてずれます。",
-    frc_bad: "基準の濃度は 300〜5000 ppm で入力してください。",
-    frc_confirm: "CO2 センサを {p} ppm に合わせて校正します。本体は濃度の安定した場所にありますか？",
-    frc_progress: "{i} / {n} 回　{c} ppm（校正前）",
-    frc_done: "校正しました（基準 {p} ppm）。センサが行った補正量: {c} ppm", frc_stopped: "中止しました。",
-    frc_failed: "校正できませんでした。{e}",
-    clock_cur: "時計の補正値", clock_ppm: "{p} ppm", clock_dur: "測定時間", clock_measure: "ずれを測る",
-    clock_apply: "補正値を保存", clock_reset: "補正を 0 に戻す",
-    clock_note: "このパソコンの時計を基準に、本体の時計のずれを測ります。先にパソコンの時刻を同期し、測定中はこのページを前面に出したまま、本体をつないでおいてください。",
-    clock_progress: "{a} / {b} 分　現在の推定 {p}",
-    clock_result: "ずれ　　　: {p} ppm（±{e}、{n} 点、{m} 分）\n1日あたり : {d} 秒\n推奨の補正値: {s} ppm（現在 {c}）",
-    clock_short: "測定が短すぎます。", clock_stuck: "本体の時計が進みません。",
-    clock_saved: "時計の補正値を {p} ppm にしました。", clock_failed: "時計の操作に失敗しました。{e}",
-    diag_run: "自己診断を実行", diag_note: "メモリ・センサ・計測を確かめます。数秒かかります。",
-    diag_result: "メモリ　: {fl}（JEDEC {j}、読み書き {rw}）\nセンサ　: {se}（{kind}）\n計測　　: {me}{val}\n総合　　: {all}",
-    diag_detail: "\n\n通信の記録: USB の作り直し {a} 回（最後のエラー {b}）、ウォッチドッグ {c} 回",
-    diag_failed: "自己診断を実行できませんでした。{e}",
-    e_need_30_measurements: "直前の計測が足りません。もう一度お試しください。",
-    e_no_co2_sensor: "この機器には CO2 センサがありません。", e_frc_failed: "センサが校正を受け付けませんでした。",
-    e_invalid_correction: "補正係数が範囲の外です。", e_measure_failed: "センサから値を読めませんでした。",
-    e_unknown_command: "この機能は本体のファームウェアが対応していません。ファームウェアを更新してください。",
+    kind: "温湿度・CO2 データロガー",
+    lead: "温度・湿度・CO2 濃度を一定間隔で記録する、26mm 角の小さなデータロガーです。ボタン電池1個で動き、記録したデータは USB でパソコンに取り出せます。",
+    open_app: "操作ページを開く", manual: "取扱説明書",
+    app_hint: "操作ページは、パソコンの Chrome または Edge で開いてください。インストールは不要です。",
+    feat_title: "特長",
+    f1_t: "ボタン電池1個で動く", f1_d: "CR2032 を1個入れるだけ。USB につないでいる間は USB から給電します。",
+    f2_t: "置き場所を選ばない", f2_d: "基板は 26 × 26 mm。棚の上や機器のすき間にも置けます。",
+    f3_t: "記録間隔は 1〜3600 秒", f3_d: "メモリは約275万件分。12秒間隔でも約1年分を保存できます（記録できる期間は電池の持ちにもよります）。",
+    f4_t: "ブラウザから操作", f4_d: "USB でつないでページを開くだけ。ドライバもソフトのインストールも要りません。",
+    f5_t: "CSV で保存", f5_d: "記録したデータは CSV ファイルに保存でき、表計算ソフトでそのまま開けます。",
+    f6_t: "1台ずつ補正できる", f6_d: "温度・湿度・CO2 の補正係数と、時計のずれの補正を本体に保存できます。",
+    how_title: "使い方",
+    s1_t: "USB でパソコンにつなぐ", s1_d: "操作ページを開いて「接続」を押し、一覧から C-Logger を選びます。",
+    s2_t: "記録を始める", s2_d: "記録間隔を入れて開始します。本体の時計はパソコンの時刻に合わせられます。",
+    s3_t: "ケーブルを抜いて設置する", s3_d: "記録を始めると本体は USB から切り離されます。あとは電池で記録を続けます。",
+    s4_t: "回収してデータを保存する", s4_d: "もう一度 USB でつなぐと記録が止まります。操作ページから CSV で保存します。",
+    spec_title: "仕様",
+    sp_kind: "種類", sp_kind_v: "CO2あり版（CO2・温度・湿度）／CO2なし版（温度・湿度）",
+    sp_sensor: "センサ", sp_sensor_v: "温湿度: Sensirion SHT40　CO2: Sensirion STCC4（CO2あり版）",
+    sp_interval: "記録間隔", sp_interval_v: "1〜3600 秒",
+    sp_mem: "記録容量", sp_mem_v: "16MB（約275万件。12秒間隔で約1年分）。いっぱいになると記録を止めます",
+    sp_power: "電源", sp_power_v: "CR2032 ×1、または USB 給電",
+    sp_usb: "通信", sp_usb_v: "USB 2.0 Full Speed（仮想 COM ポート）、Type-C",
+    sp_size: "外形", sp_size_v: "基板 26 × 26 mm",
+    sp_soft: "ソフトウェア", sp_soft_v: "ブラウザ版の操作ページ（Chrome・Edge）、Windows 用の PC ツール",
   },
   en: {
-    manual: "Manual",
-    lead: "Control page for the C-Logger temperature / humidity / CO2 data logger. Connect it over USB to start logging and to save data.",
-    unsupported: "This browser is not supported. Please open this page in Chrome or Edge on a computer.",
-    connect: "Connect", disconnect: "Disconnect",
-    conn_hint: "Plug the logger in over USB, press Connect and choose C-Logger from the list.",
-    connecting: "Connecting…", connected: "Connected.",
-    conn_failed: "Could not connect. {e}  Check that no other software is using the device, re-plug the USB cable and try again.",
-    unplugged: "The USB cable was unplugged.", lost: "Connection lost",
-    not_clogger: "This device is not a C-Logger", no_response: "{cmd}: no response",
-    info_title: "Device", info_id: "Device ID", info_fw: "Firmware", info_sensor: "Sensors",
-    info_now: "Current reading", info_count: "Stored data", info_period: "Logged period", info_batt: "Battery",
-    sensor_co2: "CO2, temperature, humidity", sensor_th: "Temperature, humidity", sensor_ng: "Cannot measure",
-    count_fmt: "{n} records", count_interval: " (interval {s} s)",
-    tab_log: "Logging", tab_data: "Data", tab_live: "Live view", tab_calib: "Calibration", tab_clock: "Clock", tab_diag: "Diagnostics",
-    sec: "s", min: "min", temp: "Temperature", hum: "Humidity",
-    log_interval: "Logging interval", log_start: "Start logging",
-    log_note: "The logger's clock is set to this computer's time and the stored data is erased before logging starts. Once started, the logger disconnects from USB. Unplug the cable and place the logger.",
-    capacity: "Memory lasts {d}",
-    dur_days: "about {v} days", dur_hours: "about {v} hours", dur_min: "about {v} min",
-    interval_bad: "Enter the interval as a whole number from 1 to 3600 seconds.",
-    start_confirm_erase: "The {n} stored records will be erased. ", start_confirm: "Start logging every {s} seconds?",
-    erasing: "Erasing stored data…", starting: "Starting…",
-    started: "Logging has started. Unplug the USB cable and place the logger. ",
-    started_co2: "CO2 readings may be inaccurate for about the first hour while the sensor warms up. ",
-    started_read: "To read the data, plug the logger in and press Connect on this page.",
-    start_failed: "Could not start logging. {e}",
-    data_save: "Save as CSV", data_erase: "Erase data",
-    data_note: "Saving does not erase the data on the logger. It is erased when you start logging again or press Erase data.",
-    no_data: "There is no data to save.", reading: "Reading… {a} / {b} records",
-    saved: "Saved {n} records to {f}. ", saved_failed: "{n} records failed to measure (left blank).",
-    save_failed: "Could not save. {e}",
-    dump_header: "Failed to read data (header)", dump_short: "Data transfer stopped ({a}/{b} bytes)",
-    erase_confirm: "Erase all {n} stored records? This cannot be undone.",
-    erased: "Data erased.", erase_failed: "Could not erase. {e}",
-    live_start: "Start", stop: "Stop", live_note: "Measures and shows the values every second (nothing is stored).",
-    live_failed: "Could not measure. {e}",
-    corr_title: "Correction of readings", corr_formula: "corrected = a × raw + b",
-    corr_save: "Save to device", corr_reset: "Reset (no correction)",
-    corr_note: "Limits: a 0.8–1.2; b ±5 °C, ±15 %RH, ±2000 ppm. The logger stores raw values; the correction is applied when values are shown or saved as CSV.",
-    corr_bad: "Coefficient out of range. a must be 0.8–1.2; b within ±5 (temperature), ±15 (humidity), ±2000 (CO2).",
-    corr_saved: "Correction saved to the device.", corr_failed: "Could not save. {e}",
-    frc_title: "CO2 sensor recalibration", frc_ref: "Reference CO2", frc_run: "Recalibrate",
-    frc_note: "Place the logger where the CO2 concentration is known and stable (about 420 ppm outdoors) and keep away from it. It measures for about one minute (40 times) and then recalibrates. A wrong reference shifts all later readings.",
-    frc_bad: "Enter a reference between 300 and 5000 ppm.",
-    frc_confirm: "Recalibrate the CO2 sensor to {p} ppm. Is the logger in a place with a stable concentration?",
-    frc_progress: "{i} / {n}   {c} ppm (before)",
-    frc_done: "Recalibrated to {p} ppm. Correction applied by the sensor: {c} ppm", frc_stopped: "Stopped.",
-    frc_failed: "Could not recalibrate. {e}",
-    clock_cur: "Clock correction", clock_ppm: "{p} ppm", clock_dur: "Measure for", clock_measure: "Measure drift",
-    clock_apply: "Apply correction", clock_reset: "Reset correction to 0",
-    clock_note: "Measures the drift of the logger's clock against this computer's clock. Synchronise the computer's time first, and keep this page in front and the logger connected while measuring.",
-    clock_progress: "{a} / {b} min   estimate {p}",
-    clock_result: "Drift      : {p} ppm (±{e}, {n} points, {m} min)\nPer day    : {d} s\nSuggested  : {s} ppm (now {c})",
-    clock_short: "The measurement was too short.", clock_stuck: "The logger's clock does not advance.",
-    clock_saved: "Clock correction set to {p} ppm.", clock_failed: "Clock operation failed. {e}",
-    diag_run: "Run self-test", diag_note: "Checks the memory, the sensor and a measurement. Takes a few seconds.",
-    diag_result: "Memory  : {fl} (JEDEC {j}, read/write {rw})\nSensor  : {se} ({kind})\nMeasure : {me}{val}\nOverall : {all}",
-    diag_detail: "\n\nLink log: USB restarts {a} (last error {b}), watchdog resets {c}",
-    diag_failed: "Could not run the self-test. {e}",
-    e_need_30_measurements: "Not enough measurements beforehand. Please try again.",
-    e_no_co2_sensor: "This device has no CO2 sensor.", e_frc_failed: "The sensor rejected the recalibration.",
-    e_invalid_correction: "Coefficient out of range.", e_measure_failed: "Could not read the sensor.",
-    e_unknown_command: "The logger's firmware does not support this function. Please update the firmware.",
+    kind: "Temperature / humidity / CO2 data logger",
+    lead: "A small 26 mm square data logger that records temperature, humidity and CO2 concentration at a fixed interval. It runs on a single coin cell, and the recorded data is transferred to a computer over USB.",
+    open_app: "Open the control page", manual: "Manual (Japanese)",
+    app_hint: "Open the control page in Chrome or Edge on a computer. Nothing needs to be installed.",
+    feat_title: "Features",
+    f1_t: "Runs on one coin cell", f1_d: "Just insert a CR2032. While connected over USB it is powered from USB.",
+    f2_t: "Fits anywhere", f2_d: "The board is 26 × 26 mm, small enough for a shelf or a gap in equipment.",
+    f3_t: "Interval from 1 to 3600 s", f3_d: "The memory holds about 2.75 million records: about one year even at a 12-second interval (how long it can log also depends on the battery).",
+    f4_t: "Controlled from a browser", f4_d: "Plug it in over USB and open the page. No driver or software installation.",
+    f5_t: "Save as CSV", f5_d: "Recorded data is saved as a CSV file that opens directly in a spreadsheet.",
+    f6_t: "Per-unit correction", f6_d: "Correction coefficients for temperature, humidity and CO2, and a clock drift correction, are stored in the device.",
+    how_title: "How to use",
+    s1_t: "Connect to a computer over USB", s1_d: "Open the control page, press Connect and choose C-Logger from the list.",
+    s2_t: "Start logging", s2_d: "Enter the logging interval and start. The logger's clock is set to the computer's time.",
+    s3_t: "Unplug and place it", s3_d: "Once logging starts, the logger disconnects from USB and keeps recording on the battery.",
+    s4_t: "Collect it and save the data", s4_d: "Plugging it in again stops the logging. Save the data as CSV from the control page.",
+    spec_title: "Specifications",
+    sp_kind: "Models", sp_kind_v: "With CO2 (CO2, temperature, humidity) / without CO2 (temperature, humidity)",
+    sp_sensor: "Sensors", sp_sensor_v: "Temperature / humidity: Sensirion SHT40   CO2: Sensirion STCC4 (CO2 model)",
+    sp_interval: "Logging interval", sp_interval_v: "1 to 3600 s",
+    sp_mem: "Memory", sp_mem_v: "16 MB (about 2.75 million records; about one year at a 12-second interval). Logging stops when full",
+    sp_power: "Power", sp_power_v: "One CR2032, or USB",
+    sp_usb: "Interface", sp_usb_v: "USB 2.0 Full Speed (virtual COM port), Type-C",
+    sp_size: "Size", sp_size_v: "Board 26 × 26 mm",
+    sp_soft: "Software", sp_soft_v: "Browser control page (Chrome, Edge), PC tool for Windows",
   },
 };
 
+// 言語の選択は操作ページと共有する
 let lang = "ja";
 try {
   lang = localStorage.getItem("clogger_lang") || (navigator.language.startsWith("ja") ? "ja" : "en");
@@ -357,768 +193,17 @@ try {
 }
 if (!TEXT[lang]) lang = "ja";
 
-function t(key, vars) {
-  let s = TEXT[lang][key];
-  if (s === undefined) s = key;
-  if (vars) for (const k in vars) s = s.split(`{${k}}`).join(String(vars[k]));
-  return s;
-}
-
-const $ = (id) => document.getElementById(id);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const nowSec = () => (performance.timeOrigin + performance.now()) / 1000;   // PC の時刻 [秒] (小数つき)
-
-// ------------------------------------------------------------
-// 通信 (USB-CDC / JSON 1行=1コマンド。dump の本体だけバイナリ)
-// ------------------------------------------------------------
-const USB_FILTER = { usbVendorId: 0x04D8, usbProductId: 0x0B15 };   // K-Logger と共通。hello の device 名で確かめる
-const DEVICE_NAME = "C-Logger";
-const REC_SIZE = 6;            // int16 温度[℃×100], uint16 湿度[%×100], uint16 CO2[ppm] (little-endian)
-const CO2_INVALID = 0xFFFF;    // 計測失敗 (欠測)
-const CO2_NONE = 0xFFFE;       // CO2なし版 (温湿度は有効)
-const DUMP_CHUNK = 10000;      // dump_range 1回あたりのレコード数
-const FRC_SAMPLES = 40;        // CO2 の校正の前の計測回数 (STCC4 は 30 回以上必要)
-
-class DeviceError extends Error {
-  constructor(message, code) { super(message); this.code = code; }
-}
-
-class CLogger {
-  constructor(port) {
-    this.port = port;
-    this.buf = new Uint8Array(0);   // 受信済みで未処理のバイト
-    this.wake = null;               // 受信を待っている処理を起こす関数
-    this.closed = false;
-    this.id = 0;
-  }
-
-  async open() {
-    await this.port.open({ baudRate: 115200 });   // USB-CDC なのでボーレートは使われない
-    this.writer = this.port.writable.getWriter();
-    this.reader = this.port.readable.getReader();
-    this.pump = this._pump();
-    await sleep(200);
-    this.buf = new Uint8Array(0);                 // 接続前に溜まっていた分を捨てる
-  }
-
-  async _pump() {
-    try {
-      for (;;) {
-        const { value, done } = await this.reader.read();
-        if (done) break;
-        if (value && value.length) {
-          const merged = new Uint8Array(this.buf.length + value.length);
-          merged.set(this.buf); merged.set(value, this.buf.length);
-          this.buf = merged;
-          if (this.wake) this.wake();
-        }
-      }
-    } catch (e) {
-      // 抜かれた、または本体が USB から切り離れた
-    }
-    this.closed = true;
-    if (this.wake) this.wake();
-  }
-
-  async close() {
-    this.closed = true;
-    try { await this.reader.cancel(); } catch (e) {}
-    try { await this.pump; } catch (e) {}
-    try { this.reader.releaseLock(); } catch (e) {}
-    try { this.writer.releaseLock(); } catch (e) {}
-    try { await this.port.close(); } catch (e) {}
-  }
-
-  // 新しいデータが届くか、時間切れまで待つ。届いたら true
-  _waitData(ms) {
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => { this.wake = null; resolve(false); }, ms);
-      this.wake = () => { clearTimeout(timer); this.wake = null; resolve(true); };
-    });
-  }
-
-  _take(n) {
-    const out = this.buf.slice(0, n);
-    this.buf = this.buf.slice(n);
-    return out;
-  }
-
-  // JSON の行を1つ読む。'{' で始まらない行は読み飛ばす。時間切れなら null
-  async _readJsonLine(ms) {
-    const deadline = Date.now() + ms;
-    for (;;) {
-      const nl = this.buf.indexOf(0x0A);
-      if (nl >= 0) {
-        const line = new TextDecoder().decode(this._take(nl + 1)).trim();
-        if (line.startsWith("{")) {
-          try { return JSON.parse(line); } catch (e) { return null; }
-        }
-        continue;
-      }
-      const left = deadline - Date.now();
-      if (left <= 0 || this.closed) return null;
-      await this._waitData(left);
-    }
-  }
-
-  async _send(command, params) {
-    if (this.closed) throw new Error(t("lost"));
-    const req = { id: ++this.id, command };
-    if (params !== undefined) req.params = params;
-    await this.writer.write(new TextEncoder().encode(JSON.stringify(req) + "\n"));
-    return this.id;
-  }
-
-  // コマンドを送って応答を返す。応答が無い・エラー応答なら例外
-  async request(command, params, waitMs = 3000) {
-    const rid = await this._send(command, params);
-    for (;;) {
-      const j = await this._readJsonLine(waitMs);
-      if (j === null) throw new Error(this.closed ? t("lost") : t("no_response", { cmd: command }));
-      if (j.id === rid) {
-        if (!j.ok && j.error) {
-          const friendly = TEXT[lang]["e_" + j.error];
-          throw new DeviceError(friendly || `${command}: ${j.error}`, j.error);
-        }
-        return j;
-      }
-    }
-  }
-
-  // レコード [start, start+count) を生のバイト列で受け取る。onBytes(受信済みバイト数) を随時呼ぶ
-  async dumpRange(start, count, onBytes) {
-    const rid = await this._send("dump_range", { start, count });
-    const hdr = await this._readJsonLine(5000);
-    if (!hdr || hdr.id !== rid || hdr.dump !== "begin") throw new Error(t("dump_header"));
-    const size = hdr.rec_size || REC_SIZE;
-    const total = hdr.count * size;
-    const raw = new Uint8Array(total);
-    let got = 0;
-    while (got < total) {
-      if (this.buf.length === 0) {
-        if (this.closed || !(await this._waitData(6000))) break;
-        continue;
-      }
-      const part = this._take(Math.min(this.buf.length, total - got));
-      raw.set(part, got);
-      got += part.length;
-      if (onBytes) onBytes(got);
-    }
-    if (got < total) throw new Error(t("dump_short", { a: got, b: total }));
-    await this._readJsonLine(3000);   // フッタ
-    return { hdr, raw, size };
-  }
-
-  // 本体の時計 (epoch) が1秒進む瞬間の PC の時刻を推定する。[新しい epoch, PC の時刻]
-  async epochTransition(timeoutMs = 3000) {
-    const poll = async () => {
-      const t0 = nowSec();
-      const e = (await this.request("get_status")).epoch;
-      return [e, (t0 + nowSec()) / 2];
-    };
-    let [e0, tPrev] = await poll();
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const [e, tm] = await poll();
-      if (e !== e0) return [e, (tPrev + tm) / 2];   // 変わる前の最後の読みと、変わった後の最初の読みの中間
-      tPrev = tm;
-    }
-    throw new Error(t("clock_stuck"));
-  }
-}
-
-// ------------------------------------------------------------
-// 値の変換と表示
-// ------------------------------------------------------------
-// 補正 (補正後 = a × 補正前 + b)。係数は本体に保存されていて、読み出し時にここで適用する
-function makeCorrection(resp) {
-  const coef = {};
-  for (const k of ["temp", "hum", "co2"]) {
-    coef[k] = resp && resp[k] ? [Number(resp[k].a), Number(resp[k].b)] : [1, 0];
-  }
-  return {
-    coef,
-    apply(key, raw) {
-      if (raw === null) return null;
-      const v = coef[key][0] * raw + coef[key][1];
-      if (key === "hum") return Math.min(100, Math.max(0, v));
-      if (key === "co2") return Math.max(0, Math.round(v));
-      return v;
-    },
-  };
-}
-
-// (epoch, PC の時刻) の列に epoch = a + b·t を当てはめ、ずれ (b−1)×1e6 [ppm] と標準誤差を返す
-function fitPpm(pts) {
-  const n = pts.length;
-  const ts = pts.map((p) => p[1] - pts[0][1]), es = pts.map((p) => p[0] - pts[0][0]);
-  const mt = ts.reduce((a, b) => a + b, 0) / n, me = es.reduce((a, b) => a + b, 0) / n;
-  let sxx = 0, sxy = 0;
-  for (let i = 0; i < n; i++) { sxx += (ts[i] - mt) ** 2; sxy += (ts[i] - mt) * (es[i] - me); }
-  const b = sxy / sxx, a = me - b * mt;
-  let err = NaN;
-  if (n > 2) {
-    let res = 0;
-    for (let i = 0; i < n; i++) res += (es[i] - (a + b * ts[i])) ** 2;
-    err = Math.sqrt(res / (n - 2) / sxx) * 1e6;
-  }
-  return [(b - 1) * 1e6, err];
-}
-
-const pad = (n) => String(n).padStart(2, "0");
-function fmtTime(epoch, compact = false) {
-  const d = new Date(epoch * 1000);
-  const ymd = [d.getFullYear(), pad(d.getMonth() + 1), pad(d.getDate())];
-  const hms = [pad(d.getHours()), pad(d.getMinutes()), pad(d.getSeconds())];
-  return compact ? `${ymd.join("")}_${hms.join("")}` : `${ymd.join("-")} ${hms.join(":")}`;
-}
-
-function fmtDuration(sec) {
-  if (sec >= 2 * 86400) return t("dur_days", { v: (sec / 86400).toFixed(sec >= 20 * 86400 ? 0 : 1) });
-  if (sec >= 2 * 3600) return t("dur_hours", { v: (sec / 3600).toFixed(1) });
-  return t("dur_min", { v: Math.max(1, Math.round(sec / 60)) });
-}
-
-const signed = (v, digits) => (v >= 0 ? "+" : "") + v.toFixed(digits);
-
-// ------------------------------------------------------------
-// 画面の状態
-// ------------------------------------------------------------
-let dev = null;         // 接続中の CLogger
-let info = null;        // 接続時に読んだ情報 { hello, id, status, batt, corr, now, hasCo2, clockPpm }
-let busy = false;       // 通信中 (ほかの操作を止める)
-let stopReq = false;    // 実行中の連続処理 (ライブ表示・時計・校正) への中止の要求
-let running = null;     // 実行中の連続処理の名前 ("live" / "clock" / "frc")
-let clockNew = null;    // 時計の測定で求めた推奨の補正値
-
-function showMessage(text, kind) {
-  const m = $("message");
-  if (!text) { m.hidden = true; return; }
-  m.textContent = text;
-  m.className = "msg " + (kind || "ok");
-  m.hidden = false;
-}
-
-// 操作中はほかのボタンと入力を止める。keep に渡したボタン (停止ボタン) だけは押せるままにする
-function setBusy(on, keep) {
-  busy = on;
-  document.querySelectorAll("#connectBox button, #app button, #app input, #app select").forEach((el) => {
-    el.disabled = on && el !== keep;
-  });
-  if (!on) updateEnabled();
-}
-
-function updateEnabled() {
-  if (!info) return;
-  const n = info.status.count;
-  $("saveBtn").disabled = n === 0;
-  $("eraseBtn").disabled = n === 0;
-  $("clockApplyBtn").disabled = clockNew === null;
-}
-
-function selectTab(name) {
-  document.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
-  document.querySelectorAll(".panel").forEach((p) => { p.hidden = p.dataset.panel !== name; });
-}
-
-// 言語に依存する表示をすべて描き直す
 function render() {
   document.documentElement.lang = lang;
-  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
-  $("langBtn").textContent = lang === "ja" ? "English" : "日本語";
-  $("connectBtn").textContent = dev ? t("disconnect") : t("connect");
-  if (!busy) $("connState").textContent = dev ? t("connected") : t("conn_hint");
-  $("liveBtn").textContent = running === "live" ? t("stop") : t("live_start");
-  $("clockBtn").textContent = running === "clock" ? t("stop") : t("clock_measure");
-  $("frcBtn").textContent = running === "frc" ? t("stop") : t("frc_run");
-  renderInfo();
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = TEXT[lang][el.dataset.i18n]; });
+  document.getElementById("langBtn").textContent = lang === "ja" ? "English" : "日本語";
 }
-
-function renderInfo() {
-  if (!info) return;
-  const { hello, id, status, batt, corr, now, hasCo2 } = info;
-  $("iId").textContent = id;
-  $("iFw").textContent = hello.fw;
-  $("iSensor").textContent = now === null ? t("sensor_ng") : (hasCo2 ? t("sensor_co2") : t("sensor_th"));
-  if (now) {
-    const tv = corr.apply("temp", now.temp_C), hv = corr.apply("hum", now.hum_pct);
-    const cv = now.co2_ppm === null ? null : corr.apply("co2", now.co2_ppm);
-    $("iNow").textContent = `${tv.toFixed(1)} ℃　${hv.toFixed(1)} %` + (cv === null ? "" : `　${cv} ppm`);
-  } else {
-    $("iNow").textContent = "—";
-  }
-  const n = status.count;
-  $("iCount").textContent = t("count_fmt", { n: n.toLocaleString() }) + (n > 0 ? t("count_interval", { s: status.interval }) : "");
-  $("iPeriod").textContent = n > 0
-    ? `${fmtTime(status.start_dt)} 〜 ${fmtTime(status.start_dt + (n - 1) * status.interval)}`
-    : "—";
-  $("iBatt").textContent = `${(batt.vbat_mV / 1000).toFixed(2)} V`;
-  $("clockCur").textContent = info.clockPpm === null ? "—" : t("clock_ppm", { p: signed(info.clockPpm, 0) });
-  // CO2なし版では CO2 の欄を出さない
-  $("lvCbox").hidden = hasCo2 === false;
-  $("cCrow").hidden = hasCo2 === false;
-  $("frcBox").hidden = hasCo2 !== true;
-  updateCapacity();
-}
-
-function updateCapacity() {
-  const sec = Number($("interval").value);
-  $("capacity").textContent = (info && sec >= 1 && sec <= 3600)
-    ? t("capacity", { d: fmtDuration(info.status.capacity * sec) }) : "";
-}
-
-function fillCorrectionInputs() {
-  const c = info.corr.coef;
-  $("cTa").value = c.temp[0]; $("cTb").value = c.temp[1];
-  $("cHa").value = c.hum[0];  $("cHb").value = c.hum[1];
-  $("cCa").value = c.co2[0];  $("cCb").value = c.co2[1];
-}
-
-// 例外の表示用の文言。接続が切れた後の例外は、原因をそのまま「接続が切れました」とする
-const errText = (e) => ((!dev || dev.closed) ? t("lost") : e.message);
-
-// 接続が切れていたら画面を切断の表示に戻す。切れていたら true
-async function dropIfLost() {
-  if (dev && dev.closed) { await disconnect(); return true; }
-  return false;
-}
-
-// ------------------------------------------------------------
-// 接続
-// ------------------------------------------------------------
-async function readInfo() {
-  const hello = await dev.request("hello");
-  if (hello.device !== DEVICE_NAME) throw new Error(t("not_clogger"));
-  const id = (await dev.request("get_id")).device_id;
-  const status = await dev.request("get_status");
-  const batt = await dev.request("get_battery");
-  const corr = makeCorrection(await dev.request("get_correction"));
-  let clockPpm = null;
-  try { clockPpm = (await dev.request("get_clock_calib")).ppm; } catch (e) { /* 古いファームウェア */ }
-  let now = null;
-  try { now = await dev.request("measure"); } catch (e) { /* センサの異常は表示で知らせる */ }
-  info = { hello, id, status, batt, corr, clockPpm, now, hasCo2: now ? now.co2_ppm !== null : null };
-}
-
-async function refreshStatus() {
-  info.status = await dev.request("get_status");
-  renderInfo();
-}
-
-async function disconnect() {
-  const d = dev;
-  dev = null; info = null; running = null; stopReq = true; clockNew = null;
-  if (d) await d.close();
-  $("app").hidden = true;
-  setBusy(false);
-  render();
-}
-
-async function connect() {
-  showMessage("");
-  // 前に許可した機器が1台だけ見つかれば、選択画面を出さずにそれを使う
-  let port = null;
-  const known = (await navigator.serial.getPorts()).filter((p) => {
-    const i = p.getInfo();
-    return i.usbVendorId === USB_FILTER.usbVendorId && i.usbProductId === USB_FILTER.usbProductId;
-  });
-  if (known.length === 1) port = known[0];
-  if (!port) {
-    try {
-      port = await navigator.serial.requestPort({ filters: [USB_FILTER] });
-    } catch (e) {
-      return;   // 選択画面を閉じた
-    }
-  }
-  setBusy(true);
-  $("connState").textContent = t("connecting");
-  try {
-    dev = new CLogger(port);
-    await dev.open();
-    await readInfo();
-    const iv = info.status.interval;
-    $("interval").value = iv >= 1 && iv <= 3600 ? iv : 60;
-    fillCorrectionInputs();
-    for (const id of ["frcResult", "clockResult", "diagResult"]) $(id).hidden = true;
-    for (const id of ["lvT", "lvH", "lvC"]) $(id).textContent = "—";
-    liveHist = { T: [], H: [], C: [] };
-    drawSparks();
-    $("saveState").textContent = "";
-    selectTab("log");
-    $("app").hidden = false;
-    setBusy(false);
-    render();
-  } catch (e) {
-    const msg = e.message;
-    await disconnect();
-    showMessage(t("conn_failed", { e: msg }), "warn");
-  }
-}
-
-// ------------------------------------------------------------
-// 記録・データ
-// ------------------------------------------------------------
-async function startLogging() {
-  const sec = Number($("interval").value);
-  if (!Number.isInteger(sec) || sec < 1 || sec > 3600) { showMessage(t("interval_bad"), "warn"); return; }
-  const n = info.status.count;
-  const ask = (n > 0 ? t("start_confirm_erase", { n: n.toLocaleString() }) : "") + t("start_confirm", { s: sec });
-  if (!confirm(ask)) return;
-
-  const co2 = info.hasCo2;
-  setBusy(true);
-  showMessage(n > 0 ? t("erasing") : t("starting"), "ok");
-  try {
-    await dev.request("clear_memory", undefined, 300000);
-    await dev.request("set_interval", { sec });
-    await dev.request("set_time", { epoch: Math.floor(Date.now() / 1000) });
-    await dev.request("start_logging");
-    await disconnect();
-    showMessage(t("started") + (co2 ? t("started_co2") : "") + t("started_read"), "ok");
-  } catch (e) {
-    showMessage(t("start_failed", { e: errText(e) }), "warn");
-    await dropIfLost();
-    setBusy(false);
-  }
-}
-
-async function saveCsv() {
-  setBusy(true);
-  showMessage("");
-  const prog = $("saveProg");
-  try {
-    const status = await dev.request("get_status");
-    const total = status.count;
-    if (total === 0) throw new Error(t("no_data"));
-    prog.max = total; prog.value = 0; prog.hidden = false;
-
-    const f2 = (v) => (v === null ? "" : v.toFixed(2));
-    const f0 = (v) => (v === null ? "" : String(v));
-    const parts = ["index,epoch,datetime,temp_C,hum_pct,co2_ppm,temp_raw_C,hum_raw_pct,co2_raw_ppm\r\n"];
-    let startDt = status.start_dt, interval = status.interval, failed = 0;
-
-    for (let start = 0; start < total; start += DUMP_CHUNK) {
-      const cnt = Math.min(DUMP_CHUNK, total - start);
-      const { hdr, raw, size } = await dev.dumpRange(start, cnt, (bytes) => {
-        const done = start + Math.floor(bytes / REC_SIZE);
-        prog.value = done;
-        $("saveState").textContent = t("reading", { a: done.toLocaleString(), b: total.toLocaleString() });
-      });
-      startDt = hdr.start_dt; interval = hdr.interval;
-      const view = new DataView(raw.buffer);
-      const lines = [];
-      for (let i = 0; i < hdr.count; i++) {
-        const o = i * size;
-        const co2raw = view.getUint16(o + 4, true);
-        let tv = null, hv = null, cv = null;
-        if (co2raw === CO2_INVALID) {
-          failed++;
-        } else {
-          tv = view.getInt16(o, true) / 100;
-          hv = view.getUint16(o + 2, true) / 100;
-          cv = co2raw === CO2_NONE ? null : co2raw;
-        }
-        const idx = start + i, ts = startDt + idx * interval;
-        lines.push([idx, ts, fmtTime(ts),
-          f2(info.corr.apply("temp", tv)), f2(info.corr.apply("hum", hv)), f0(info.corr.apply("co2", cv)),
-          f2(tv), f2(hv), f0(cv)].join(","));
-      }
-      parts.push(lines.join("\r\n") + "\r\n");
-    }
-
-    const name = `clogger_${info.id}_${fmtTime(startDt, true)}.csv`;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob(parts, { type: "text/csv" }));
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    showMessage(t("saved", { n: total.toLocaleString(), f: name }) +
-      (failed > 0 ? t("saved_failed", { n: failed }) : ""), "ok");
-  } catch (e) {
-    showMessage(t("save_failed", { e: errText(e) }), "warn");
-    if (await dropIfLost()) return;
-  }
-  $("saveState").textContent = "";
-  prog.hidden = true;
-  setBusy(false);
-}
-
-async function eraseData() {
-  if (!confirm(t("erase_confirm", { n: info.status.count.toLocaleString() }))) return;
-  setBusy(true);
-  showMessage(t("erasing"), "ok");
-  try {
-    await dev.request("clear_memory", undefined, 300000);
-    await refreshStatus();
-    showMessage(t("erased"), "ok");
-  } catch (e) {
-    showMessage(t("erase_failed", { e: errText(e) }), "warn");
-    if (await dropIfLost()) return;
-  }
-  setBusy(false);
-}
-
-// ------------------------------------------------------------
-// ライブ表示
-// ------------------------------------------------------------
-const LIVE_KEEP = 300;   // グラフに残す点数 (約5分)
-let liveHist = { T: [], H: [], C: [] };
-
-function drawSpark(svg, values) {
-  const line = svg.querySelector("polyline");
-  if (values.length < 2) { line.setAttribute("points", ""); return; }
-  let lo = Math.min(...values), hi = Math.max(...values);
-  if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
-  const step = 200 / (LIVE_KEEP - 1), x0 = 200 - step * (values.length - 1);
-  line.setAttribute("points", values.map((v, i) =>
-    `${(x0 + i * step).toFixed(1)},${(38 - 36 * (v - lo) / (hi - lo)).toFixed(1)}`).join(" "));
-}
-
-function drawSparks() {
-  drawSpark($("spT"), liveHist.T); drawSpark($("spH"), liveHist.H); drawSpark($("spC"), liveHist.C);
-}
-
-async function toggleLive() {
-  if (running === "live") { stopReq = true; return; }
-  running = "live"; stopReq = false;
-  setBusy(true, $("liveBtn"));
-  showMessage("");
-  render();
-  try {
-    while (!stopReq) {
-      const started = Date.now();
-      const m = await dev.request("measure");
-      const tv = info.corr.apply("temp", m.temp_C), hv = info.corr.apply("hum", m.hum_pct);
-      const cv = m.co2_ppm === null ? null : info.corr.apply("co2", m.co2_ppm);
-      $("lvT").textContent = tv.toFixed(2);
-      $("lvH").textContent = hv.toFixed(2);
-      $("lvC").textContent = cv === null ? "—" : String(cv);
-      liveHist.T.push(tv); liveHist.H.push(hv); if (cv !== null) liveHist.C.push(cv);
-      for (const k of ["T", "H", "C"]) if (liveHist[k].length > LIVE_KEEP) liveHist[k].shift();
-      drawSparks();
-      info.now = m;
-      const wait = 1000 - (Date.now() - started);
-      if (wait > 0 && !stopReq) await sleep(wait);
-    }
-  } catch (e) {
-    showMessage(t("live_failed", { e: errText(e) }), "warn");
-  }
-  if (!dev || await dropIfLost()) return;
-  running = null;
-  setBusy(false);
-  render();
-}
-
-// ------------------------------------------------------------
-// 校正 (補正係数、CO2 の強制校正)
-// ------------------------------------------------------------
-async function saveCorrection(reset) {
-  let params;
-  if (reset) {
-    params = { temp: { a: 1, b: 0 }, hum: { a: 1, b: 0 }, co2: { a: 1, b: 0 } };
-  } else {
-    const num = (id) => Number($(id).value);
-    params = {
-      temp: { a: num("cTa"), b: num("cTb") }, hum: { a: num("cHa"), b: num("cHb") }, co2: { a: num("cCa"), b: num("cCb") },
-    };
-    const limit = { temp: 5, hum: 15, co2: 2000 };
-    for (const k in params) {
-      const { a, b } = params[k];
-      if (!(a >= 0.8 && a <= 1.2) || !(Math.abs(b) <= limit[k])) { showMessage(t("corr_bad"), "warn"); return; }
-      params[k] = { a: Number(a.toFixed(5)), b: Number(b.toFixed(2)) };
-    }
-  }
-  setBusy(true);
-  try {
-    info.corr = makeCorrection(await dev.request("set_correction", params));
-    fillCorrectionInputs();
-    renderInfo();
-    showMessage(t("corr_saved"), "ok");
-  } catch (e) {
-    showMessage(t("corr_failed", { e: errText(e) }), "warn");
-    if (await dropIfLost()) return;
-  }
-  setBusy(false);
-}
-
-async function toggleFrc() {
-  if (running === "frc") { stopReq = true; return; }
-  const ppm = Number($("frcPpm").value);
-  if (!Number.isInteger(ppm) || ppm < 300 || ppm > 5000) { showMessage(t("frc_bad"), "warn"); return; }
-  if (!confirm(t("frc_confirm", { p: ppm }))) return;
-
-  running = "frc"; stopReq = false;
-  setBusy(true, $("frcBtn"));
-  showMessage("");
-  render();
-  const prog = $("frcProg"), out = $("frcResult");
-  prog.max = FRC_SAMPLES; prog.value = 0; prog.hidden = false; out.hidden = false; out.textContent = "";
-  try {
-    let stopped = false;
-    for (let i = 1; i <= FRC_SAMPLES; i++) {
-      if (stopReq) { stopped = true; break; }
-      const m = await dev.request("measure");
-      if (m.co2_ppm === null) throw new DeviceError(t("e_no_co2_sensor"), "no_co2_sensor");
-      prog.value = i;
-      out.textContent = t("frc_progress", { i, n: FRC_SAMPLES, c: m.co2_ppm });
-    }
-    if (stopped) {
-      out.textContent = t("frc_stopped");
-    } else {
-      const r = await dev.request("co2_frc", { ppm });
-      out.textContent = t("frc_done", { p: r.ppm, c: signed(r.correction, 0) });
-    }
-  } catch (e) {
-    out.hidden = true;
-    showMessage(t("frc_failed", { e: errText(e) }), "warn");
-  }
-  prog.hidden = true;
-  if (!dev || await dropIfLost()) return;
-  running = null;
-  setBusy(false);
-  render();
-}
-
-// ------------------------------------------------------------
-// 時計の補正
-// ------------------------------------------------------------
-async function toggleClock() {
-  if (running === "clock") { stopReq = true; return; }
-  const duration = Number($("clockMin").value) * 60, STEP = 10;
-  running = "clock"; stopReq = false; clockNew = null;
-  setBusy(true, $("clockBtn"));
-  showMessage("");
-  render();
-  const prog = $("clockProg"), out = $("clockResult");
-  prog.max = duration; prog.value = 0; prog.hidden = false; out.hidden = false; out.textContent = "";
-  try {
-    const pts = [];
-    const tStart = nowSec();
-    for (;;) {
-      pts.push(await dev.epochTransition());
-      const elapsed = pts[pts.length - 1][1] - pts[0][1];
-      const est = pts.length >= 3 ? signed(fitPpm(pts)[0], 1) + " ppm" : "—";
-      prog.value = Math.min(duration, elapsed);
-      out.textContent = t("clock_progress", { a: (elapsed / 60).toFixed(1), b: (duration / 60).toFixed(0), p: est });
-      if (nowSec() - tStart >= duration || stopReq) break;
-      // 次の点まで待つ (中止にすぐ応えられるよう細かく区切る)
-      const until = Date.now() + (STEP - 1.2) * 1000;
-      while (Date.now() < until && !stopReq) await sleep(200);
-    }
-    if (pts.length < 3) {
-      out.textContent = t("clock_short");
-    } else {
-      const [ppm, err] = fitPpm(pts);
-      const cur = info.clockPpm || 0;
-      clockNew = Math.max(-127, Math.min(127, Math.round(cur + ppm)));
-      out.textContent = t("clock_result", {
-        p: signed(ppm, 2), e: err.toFixed(2), n: pts.length, m: ((pts[pts.length - 1][1] - pts[0][1]) / 60).toFixed(1),
-        d: signed(ppm * 0.0864, 2), s: signed(clockNew, 0), c: signed(cur, 0),
-      });
-    }
-  } catch (e) {
-    out.hidden = true;
-    showMessage(t("clock_failed", { e: errText(e) }), "warn");
-  }
-  prog.hidden = true;
-  if (!dev || await dropIfLost()) return;
-  running = null;
-  setBusy(false);
-  render();
-}
-
-async function setClockCalib(ppm) {
-  setBusy(true);
-  try {
-    info.clockPpm = (await dev.request("set_clock_calib", { ppm })).ppm;
-    clockNew = null;
-    renderInfo();
-    showMessage(t("clock_saved", { p: signed(info.clockPpm, 0) }), "ok");
-  } catch (e) {
-    showMessage(t("clock_failed", { e: errText(e) }), "warn");
-    if (await dropIfLost()) return;
-  }
-  setBusy(false);
-}
-
-// ------------------------------------------------------------
-// 診断
-// ------------------------------------------------------------
-async function runSelftest() {
-  setBusy(true);
-  showMessage("");
-  const out = $("diagResult");
-  try {
-    const r = await dev.request("selftest", undefined, 10000);
-    const ok = (b) => (b ? "OK" : "NG");
-    const fl = r.flash, se = r.sensor;
-    let val = "";
-    if (se.ok) {
-      const tv = info.corr.apply("temp", se.temp_C), hv = info.corr.apply("hum", se.hum_pct);
-      const cv = se.co2_ppm === null ? null : info.corr.apply("co2", se.co2_ppm);
-      val = `（${tv.toFixed(1)} ℃, ${hv.toFixed(1)} %` + (cv === null ? "" : `, ${cv} ppm`) + "）";
-    }
-    let text = t("diag_result", {
-      fl: ok(fl.ok && fl.rw), j: fl.jedec, rw: ok(fl.rw), se: ok(r.sensor_i2c),
-      kind: r.co2 ? t("sensor_co2") : t("sensor_th"), me: ok(se.ok), val, all: ok(r.ok),
-    });
-    try {
-      const d = await dev.request("get_diag");
-      text += t("diag_detail", { a: d.usb_errs, b: d.usb_err, c: d.wdt });
-    } catch (e) { /* 古いファームウェアには無い */ }
-    out.textContent = text;
-    out.hidden = false;
-  } catch (e) {
-    out.hidden = true;
-    showMessage(t("diag_failed", { e: errText(e) }), "warn");
-    if (await dropIfLost()) return;
-  }
-  setBusy(false);
-}
-
-// ------------------------------------------------------------
-// 起動
-// ------------------------------------------------------------
-render();
-$("langBtn").addEventListener("click", () => {
+document.getElementById("langBtn").addEventListener("click", () => {
   lang = lang === "ja" ? "en" : "ja";
   try { localStorage.setItem("clogger_lang", lang); } catch (e) {}
-  if (!busy) showMessage("");
   render();
 });
-
-if (!("serial" in navigator)) {
-  $("unsupported").hidden = false;
-  $("connectBox").hidden = true;
-} else {
-  $("connectBtn").addEventListener("click", async () => {
-    if (busy) return;
-    if (dev) { await disconnect(); showMessage(""); } else { await connect(); }
-  });
-  document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => { if (!busy) selectTab(b.dataset.tab); }));
-  const on = (id, fn) => $(id).addEventListener("click", () => { if (dev && !busy) fn(); });
-  on("startBtn", startLogging);
-  on("saveBtn", saveCsv);
-  on("eraseBtn", eraseData);
-  on("corrSaveBtn", () => saveCorrection(false));
-  on("corrResetBtn", () => saveCorrection(true));
-  on("clockApplyBtn", () => { if (clockNew !== null) setClockCalib(clockNew); });
-  on("clockResetBtn", () => setClockCalib(0));
-  on("diagBtn", runSelftest);
-  // 開始と停止を兼ねるボタンは、実行中 (busy) でも押せる
-  $("liveBtn").addEventListener("click", () => { if (dev && (!busy || running === "live")) toggleLive(); });
-  $("clockBtn").addEventListener("click", () => { if (dev && (!busy || running === "clock")) toggleClock(); });
-  $("frcBtn").addEventListener("click", () => { if (dev && (!busy || running === "frc")) toggleFrc(); });
-  $("interval").addEventListener("input", updateCapacity);
-  // USB を抜かれたら切断の表示に戻す
-  navigator.serial.addEventListener("disconnect", async (ev) => {
-    if (dev && ev.target === dev.port) {
-      const wasBusy = busy;
-      await disconnect();
-      if (!wasBusy) showMessage(t("unplugged"), "warn");
-    }
-  });
-}
+render();
 </script>
 </body>
 </html>

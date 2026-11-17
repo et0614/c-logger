@@ -20,16 +20,17 @@
 
 ```
 docs/
-  index.html            ブラウザ版の操作ページ（Web Serial。GitHub Pages で公開する）
-  manual.md             取扱説明書
+  index.html            製品の紹介ページ（GitHub Pages のトップ）
+  app/index.html        ブラウザ版の操作ページ（Web Serial）
+  manual.md             取扱説明書（GitHub Pages では manual.html になる）
+  _config.yml           GitHub Pages (Jekyll) の設定
   images/               基板の外観 (3d_top/3d_bottom) とレイアウト (pcb_top/pcb_bottom)
 hardware/
-  BOM.xlsx              設計用部品表（JLCPCB 部品番号・単価・CO2あり/なしの別）
+  BOM.xlsx              設計用部品表（JLCPCB 部品番号・CO2あり/なしの別）
   datasheet/            主要部品のデータシート（ファイル名=参照記号）
   pcb/                  Fusion 設計データ (clogger.f3z)、回路図 PDF
   fab/                  JLCPCB 入稿データ（ガーバー、BOM・CPL を CO2あり/なし版それぞれ）
   enclosure/            ケース（上蓋）: case.3dm (Rhino)、case.stp (発注用)
-  cost_estimate_next.xlsx  100台製造時の費用見積もり
 firmware/clogger.X/     MPLAB X プロジェクト（AVR64DU32, MCC Melody: clogger.mc3）
 firmware/bootloader/    USB ブートローダ（euboot）。USB でのファームウェア更新と、量産用の1ファイル化 (build_production_hex.py)
 software/               PCツール: clogger_gui.py (GUI)、clogger.py (コマンド版・通信ライブラリ)、build_exe.bat (exe化)
@@ -39,7 +40,7 @@ software/               PCツール: clogger_gui.py (GUI)、clogger.py (コマ�
 ## バージョン
 
 - 基板: 3.1（シルク表記「Version 3.1」）。修正ごとに 3.1, 3.2 … と上げる。履歴は `hardware/fab/README.md`
-- ファームウェア: 3.4.2（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
+- ファームウェア: 3.4.3（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
 
 ## 配布 (GitHub Releases)
 
@@ -49,10 +50,15 @@ GitHub Actions が `CLogger_vX.Y.Z.zip`（CLogger.exe（avrdude 同梱）、フ�
 
 ## ブラウザ版の操作ページ
 
-`docs/index.html` は、ブラウザから USB の仮想 COM ポートを直接開いて操作するページ（Web Serial）。インストール不要で、PCツールの GUI 版と同じことができる（機器情報、記録の開始、CSV の保存とデータの消去、ライブ表示、補正係数、CO2 の校正、時計の補正、自己診断）。表示は日本語と英語を切り替えられる。通信方式と CSV の形式は `software/clogger.py` と同じ。HTML 1枚で、外部のライブラリは使っていない。
+`docs/app/index.html` は、ブラウザから USB の仮想 COM ポートを直接開いて操作するページ（Web Serial）。インストール不要で、PCツールの GUI 版と同じことができる（機器情報、記録の開始、CSV の保存とデータの消去、ライブ表示、補正係数、CO2 の校正、時計の補正、自己診断）。表示は日本語と英語を切り替えられる。通信方式と CSV の形式は `software/clogger.py` と同じ。HTML 1枚で、外部のライブラリは使っていない。
 
 - 動くブラウザ: パソコンの Chrome・Edge。Firefox・Safari・iPhone/iPad では動かない。
-- https か localhost でしか動かない。公開は GitHub Pages（リポジトリの Settings → Pages で、Branch を `main`、フォルダを `/docs` にする）。手元で試すなら `python -m http.server 8765 --directory docs` の後に `http://localhost:8765` を開く。
+- https か localhost でしか動かない。公開は GitHub Pages（リポジトリの Settings → Pages で、Branch を `main`、フォルダを `/docs` にする）。`docs/` がそのままサイトになる:
+  - `https://et0614.github.io/c-logger/` 製品の紹介（`index.html`）
+  - `https://et0614.github.io/c-logger/app/` 操作ページ。ケースや説明書の QR コードはここに向ける
+  - `https://et0614.github.io/c-logger/manual.html` 取扱説明書（`manual.md` を Jekyll がページにする）
+- 手元で試すなら `python -m http.server 8765 --directory docs` の後に `http://localhost:8765` を開く（取扱説明書は Jekyll を通さないので、手元では表示されない）。
+- 記録間隔を入れると、新品の電池での持ちの参考値を出す。README「消費電流の実測」の値から平均電流を計算し、1.5倍の余裕を掛けている（`batteryLifeSec`）。実測し直したら、ここの定数も直す。
 - ファームウェアの更新はできない（ブートローダは HID で、avrdude に任せている。PCツールを使う）。
 - 時計のずれの測定は、ページを前面に出したまま行う（裏に回すとブラウザがタイマーを間引く）。
 
@@ -101,6 +107,9 @@ GitHub Actions が `CLogger_vX.Y.Z.zip`（CLogger.exe（avrdude 同梱）、フ�
 - **データの消去**（3.4.0）: 使用済みの領域を末尾から先頭へ消す。件数は「先頭から連続した有効レコード」を二分探索で数えるので、先頭から消すと、途中で電源が落ちた後に消し残しを有効と数えてしまう。64KB ブロックがまるごと使用済みならブロック消去を使い（満杯で約3分 → 約40秒）、待ちの間も USB のポーリングを続ける（`W25_SetBusyHook`）。
 - **電池切れの表示**（3.4.0）: 点滅の合間は STANDBY で眠る。USB・ADC を止め、フラッシュも Power-down にする。
 - **CO2 センサの暖機**（3.4.1）: CO2あり版は、記録開始（コンディショニングの後）から1時間、記録間隔によらず毎秒 single shot を続ける（`CO2_WARMUP_SEC`）。STCC4 は3時間以上止めた後、精度が出るまでに連続計測で最大1時間、または single shot 360回かかる（datasheet 1.1.3）。窓の5回だけでは、記録間隔1分で72分、10分で12時間かかる。暖機中も記録は通常どおり（各区間の末尾5秒の平均）で、窓の外の結果は捨てる。暖機の消費は約1mA × 1時間。
+- **CO2なし版の計測回数**（3.4.3）: CO2なし版は1区間に1回だけ測る（区間の最後の1秒）。CO2あり版は末尾5秒を毎秒測って CO2 を平均するが、温湿度は最後の1回しか使わないので、CO2なし版で5回測るのは無駄だった。
+- **消費電流の実測**（CO2なし版、FW 3.4.2、クランプ電流計 5回巻き、誤差 ±10uA 程度）: 待機 約33uA、記録中 約38〜41uA。大半は昇圧 IC（TPS61021A）の自己消費（標準 17uA、出力側）と帰還抵抗（約5uA）で、ファームウェアでは減らせない。CR2032 を 200mAh と見て、CO2なし版の持ちは約7か月が上限。電池を入れたままの保管でも同じ速さで減る。数ミリ秒のパルスは電流計では正しく平均できないので、正確に測るには本体側に大きなコンデンサを入れて平滑する。
+- **消費電流の実測**（CO2あり版、クランプ電流計 5回巻き）: 待機 約41uA、コンディショニング 約4.2mA × 約17秒、センサ idle 中 約95uA（待機 + 54uA。STCC4 の idle 55uA と合う）、毎秒計測中 平均 約1.03mA（計測中のピーク 約1.7mA が約0.58秒）。計測1回の電荷は約1.0mC（電池側）。1件につき5回測るので、平均電流は 約41 + 4900 ÷ 記録間隔[秒] uA。CR2032 を 200mAh と見た持ちの目安: 1分間隔 約2か月、2分 約3か月、5分 約5か月、10分 約5.5か月。5秒間隔以下は毎秒計測になり約8日。暖機（1時間）は記録開始ごとに約1.0mAh。sleep 中の電流は待機と同じと仮定していて、実測していない。
 - **CO2 センサの sleep**（3.4.1）: 暖機の後は、計測の窓の合間に STCC4 を sleep にする（idle 55uA → 1uA。datasheet 3.4.6 の推奨手順）。待機に入るときも sleep にする（電源投入後は idle のまま待っている）。sleep 中の STCC4 はソフトリセットにも応答しないので、初期化の前に必ず起こす（起こさないと「CO2なし」と誤判定する）。
 - **CO2 の出力の下限は 380 ppm**（STCC4 の出力範囲 380〜32000 ppm）。校正前で基準が低い個体は、外気でも 380 に張り付く。初回の通電では、連続計測12時間の後に外気に触れさせて自動校正（ASC）が働くまで精度が出ない（datasheet 1.1.4）。ASC は計測間隔 5〜600秒を前提にしているので、記録間隔が10分を超えると働かない可能性がある。
 - **試験用の `debug_fill`**（3.4.1）: ダミーのレコードを書き足す（`{"count":N,"seed":S}`）。大量のデータでの読み出しと、ブロック消去の試験に使う。PCツールからは呼ばない。

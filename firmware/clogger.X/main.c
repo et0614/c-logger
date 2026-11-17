@@ -410,7 +410,10 @@ void executeSecondlyTask(void)
         else if (rec_latest < MAX_RECORD_COUNT) // 満杯でなければ計測を継続
         {
             uint16_t N = EM_settings.interval;
-            uint16_t w = (CO2_AVG_WINDOW_SEC < N) ? CO2_AVG_WINDOW_SEC : N; // 実効窓 = min(窓,間隔)
+            // 実効窓 = min(窓,間隔)。CO2なし版は平均する値が無い (温湿度は窓の最後の1回だけ使う) ので
+            // 窓は1秒 = 区間の最後に1回だけ測る (5回測っても4回は捨てることになり、電池の無駄)。
+            uint16_t win = Measurement_HasCO2() ? CO2_AVG_WINDOW_SEC : 1;
+            uint16_t w = (win < N) ? win : N;
             uint16_t win_start = N - w;
 
             // CO2 センサの暖機中 (記録開始から CO2_WARMUP_SEC 秒) は、窓の外でも毎秒計測を続ける。
