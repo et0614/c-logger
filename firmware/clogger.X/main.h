@@ -45,6 +45,16 @@ bool getLoggingActive(void);
 void     Clock_Set(uint32_t epoch);
 uint32_t Clock_Get(void);
 
+// 不具合の調査用の記録 (get_diag コマンドで返す)。電源を入れ直すまで残る。
+typedef struct {
+    uint16_t magic;       // 有効な記録である印
+    uint8_t  rstfr;       // 今回の起動のリセット要因 (RSTCTRL.RSTFR。ブートローダが消していれば 0)
+    int8_t   usb_err;     // USB スタックが最後に止まったときのエラーコード (RETURN_CODE_t。無ければ 0)
+    uint8_t  usb_errs;    // USB スタックが止まって作り直した回数
+    uint8_t  wdt_resets;  // ウォッチドッグでリセットした回数
+} Diag_t;
+const Diag_t *Diag_Get(void);
+
 #ifdef	__cplusplus
 }
 #endif

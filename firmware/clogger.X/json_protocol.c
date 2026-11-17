@@ -289,6 +289,23 @@ static void ph_get_status(int32_t id, const char *json,
     send_line(b);
 }
 
+// 不具合の調査用の記録を返す (main.h の Diag_t)。電源を入れ直すまで残る。
+//   rst      : 今回の起動のリセット要因 (RSTCTRL.RSTFR)
+//   usb_err  : USB スタックが最後に止まったときのエラーコード (無ければ 0)
+//   usb_errs : USB スタックが止まって作り直した回数
+//   wdt      : ウォッチドッグでリセットした回数
+static void ph_get_diag(int32_t id, const char *json,
+                        const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    const Diag_t *d = Diag_Get();
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b),
+        "{\"id\":%ld,\"ok\":true,\"rst\":%u,\"usb_err\":%d,\"usb_errs\":%u,\"wdt\":%u}\n",
+        (long)id, (unsigned)d->rstfr, (int)d->usb_err, (unsigned)d->usb_errs, (unsigned)d->wdt_resets);
+    send_line(b);
+}
+
 // ライブ計測 (Flash保存なし): STCC4 single-shot で co2/温湿度を1回取得して返す。
 // USB接続のままセンサ確認/外気校正(FRC)確認に使う。内部で約500msブロックする。
 static void ph_measure(int32_t id, const char *json,
@@ -620,7 +637,8 @@ static const jp_command_t s_commands[] = {
     { "clear_memory",  ph_clear_memory  },
     { "factory_reset", ph_factory_reset },
     { "get_status",    ph_get_status    },
-    { "measure",       ph_measure       },
+    { "get_diag",      ph_get_diag      },
+    { "measure",      ph_measure       },
     { "selftest",      ph_selftest      },
     { "dump",          ph_dump          },
     { "dump_range",    ph_dump_range    },

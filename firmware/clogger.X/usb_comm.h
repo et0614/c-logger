@@ -21,6 +21,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /// CDC 仮想シリアルポートを初期化する (SYSTEM_Initialize の後に1回呼ぶ)
 void USB_Comm_Initialize(void);
@@ -45,6 +46,13 @@ void USB_Comm_Flush(void);
 /// USBスタック全体(USBDevice_Handle + CDCハンドラ)を1回駆動する。
 /// dump等の長時間バルク送信中に定期的に呼び、デバイスを無応答化させない(ホスト側パイプ停止防止)。
 void USB_Comm_Pump(void);
+
+/// USB スタックがエラーで止まっていれば、そのエラーコード (usb_common_elements.h の RETURN_CODE_t、0 以外)。
+/// 正常なら 0。止まったスタックは自分では戻らないので、USB を作り直すこと。
+int8_t USB_Comm_Fault(void);
+
+/// 前回の呼び出し以降に SOF を受けたか (受けていれば、ホストとつながって動いている)。
+bool USB_Comm_SofSeen(void);
 
 /// USBモジュールを完全停止する (ロギング=省電力モード移行時に使う)。
 /// USBが有効だと主発振 OSCHF(12MHz) が起き続け、STANDBYでも ~2mA 消費するため、

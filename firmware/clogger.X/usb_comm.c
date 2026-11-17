@@ -8,6 +8,8 @@
 #include "mcc_generated_files/usb/usb_common/usb_core_transfer.h"     // USB_TransferControlDataSet
 #include "mcc_generated_files/timer/delay.h"                          // DELAY_milliseconds
 #include <avr/io.h>                                                   // USB0 / USB_ENABLE_bm / USB_ATTACH_bm
+#include <avr/wdt.h>                                                  // wdt_reset
+#include <stdbool.h>
 
 // 【エラッタ対策】SET_LINE_CODING/GET_LINE_CODING を偶数アドレスのバッファで処理する。
 // MCC の usb_cdc.c は通信設定(usbCDCLineCoding, 7バイト)のアライメントを指定していないため、
@@ -34,19 +36,44 @@ static RETURN_CODE_t lineCodingRequestHandler(USB_SETUP_REQUEST_t *req)
     return USB_CDCRequestHandler(req); // その他(SET_CONTROL_LINE_STATE等)は従来どおり
 }
 
+// SOF (1ms ごとのフレーム開始) を受けたか。ホストとつながって動いている間は立ち続ける。
+static volatile bool s_sof_seen = false;
+static void sofHandler(void) { s_sof_seen = true; }
+
+// 直前の送信がホストに読まれず時間切れになった。バッファが空くまで以後の送信はすぐ諦める
+// (ホストが読んでいないのに応答ごとに数秒待つと、dump などで長時間ふさがるため)。
+static bool s_tx_stalled = false;
+
 void USB_Comm_Initialize(void)
 {
-    // USB デバイス層 (USBDevice_Initialize) は SYSTEM_Initialize() 済み。
+    // USB デバイス層 (USBDevice_Initialize) は呼び出し済みであること。
     // ここでは CDC 仮想シリアルポート層のみ初期化する。
     USB_CDCVirtualSerialPortInitialize();
     USB_ClassRequestCallbackRegister(lineCodingRequestHandler); // CDCの要求処理を上書き登録
+    USB_SOFCallbackRegister(sofHandler);
+    s_sof_seen = false;
+    s_tx_stalled = false;
+}
+
+bool USB_Comm_SofSeen(void)
+{
+    bool seen = s_sof_seen;
+    s_sof_seen = false;
+    return seen;
+}
+
+int8_t USB_Comm_Fault(void)
+{
+    // MCC の USB スタックは一度エラーを返すと以後の処理を止める (usb_device.c の usbStatus)。
+    // 未対応の要求や EP0 の状態ずれでも起きるので、呼び出し側で検出して USB を作り直す。
+    RETURN_CODE_t st = USBDevice_StatusGet();
+    return (st == SUCCESS) ? 0 : (int8_t)st;
 }
 
 void USB_Comm_Task(void)
 {
     // 1. USB スタックを駆動 (エニュメレーション応答・TX/RX の進行)
-    USBDevice_Handle();
-    USB_CDCVirtualSerialPortHandler();
+    USB_Comm_Pump();
 
     // 2. 受信バッファをドレインして 1 文字ずつコマンドパーサに渡す。
     //    while で空になるまで読み切ることで 1 tick の受信スループットを稼ぐ。
@@ -72,6 +99,7 @@ static bool wait_tx_drained(int budget_ms)
     while (!CIRCBUF_Empty(&usbCDCTransmitBuffer))
     {
         USB_Comm_Pump();
+        if (USB_Comm_Fault() != 0) return false; // スタックが止まった: 待っても進まない
         if (budget_ms-- <= 0) return false;
         DELAY_milliseconds(1);
     }
@@ -85,10 +113,19 @@ static bool wait_tx_drained(int budget_ms)
 static uint16_t send_block(const uint8_t *data, uint16_t len)
 {
     uint16_t sent = 0;
+
+    // 前回ホストに読まれなかった分がまだ残っていれば、待たずに諦める
+    if (s_tx_stalled)
+    {
+        USB_Comm_Pump();
+        if (!CIRCBUF_Empty(&usbCDCTransmitBuffer)) return 0;
+        s_tx_stalled = false;
+    }
+
     while (sent < len)
     {
         // 直前の転送完了を待つ(ここで追記しない=欠落防止の肝)
-        if (!wait_tx_drained(2000)) break;
+        if (!wait_tx_drained(2000)) { s_tx_stalled = true; return sent; }
 
         // 空いたバッファに入るだけ詰める (満杯=BUFFER_FULL で停止)
         while (sent < len && USB_CDCWrite(data[sent]) == CDC_SUCCESS)
@@ -98,7 +135,7 @@ static uint16_t send_block(const uint8_t *data, uint16_t len)
         USB_Comm_Pump();
     }
     // 最後の塊を確実にホストへ送出 (次の送信が転送中追記で潰さないよう空を待つ)
-    wait_tx_drained(2000);
+    if (!wait_tx_drained(2000)) s_tx_stalled = true;
     return sent;
 }
 
@@ -125,6 +162,8 @@ void USB_Comm_Pump(void)
     // USBスタック全体を1回駆動する。長時間のバルク送信(dump)中も、デバイスコア
     // (バスイベント/EP0応答)とCDC送出を進めることで、「デバイス無応答化によるホスト側
     // パイプ停止(転送が途中で止まる)」を防ぐ。
+    // ウォッチドッグ (USB通信モードでのみ有効) もここで払う。スタックの中で固まれば払われずリセットされる。
+    wdt_reset();
     USBDevice_Handle();
     USB_CDCVirtualSerialPortHandler();
 }
@@ -143,7 +182,14 @@ void USB_Comm_Disable(void)
     // 実質スリープできず ~2mA 消費する(実測)。detach + USBEN=0 で OSCHF が STANDBY で
     // 停止できるようにし、ベース電流を大幅に下げる。
     // 【前提】最後の応答は呼び出し側が USB_Comm_Flush() 済みであること(これ以降USB送信不可)。
-    // 【復帰】USB通信に戻すにはリセット(SYSTEM_Initialize が USB を再有効化)。
+    // 【復帰】USBDevice_Initialize() → USB_Comm_Initialize() で作り直すか、リセットする。
     USB0.CTRLB &= ~USB_ATTACH_bm;   // バスから detach (ホストには切断として見える)
     USB0.CTRLA &= ~USB_ENABLE_bm;   // USBモジュール無効化 → OSCHFクロック要求を解除
+    // アドレスを消す。残したまま attach し直すと、アドレス未設定のはずの間も「エニュメレーション済み」に
+    // 見え、接続直後の Suspend (ホストのデバウンス中の無通信) を「抜かれた」と誤って扱ってしまう。
+    USB0.ADDR = 0;
+    // 送りかけのデータを捨てる (作り直した後に古い応答が出ていかないように)
+    usbCDCTransmitBuffer.head = 0;
+    usbCDCTransmitBuffer.tail = 0;
+    s_tx_stalled = false;
 }

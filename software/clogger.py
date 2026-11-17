@@ -431,6 +431,13 @@ def cmd_info(dev, args):
         print("補正係数: " + "  ".join(f"{Correction.NAMES[k]} {corr.describe(k)}" for k in Correction.KEYS))
     b = dev.request("get_battery")
     print(f"電池電圧: {b['vbat_mV']/1000:.3f} V")
+    try:
+        d = dev.request("get_diag")   # FW 3.3.9 以降。不具合の調査用 (電源を入れ直すまで残る)
+    except RuntimeError:
+        d = None
+    if d:
+        print(f"診断: リセット要因 0x{d['rst']:02X}  USBの作り直し {d['usb_errs']}回 (最後のエラー {d['usb_err']})"
+              f"  ウォッチドッグ {d['wdt']}回")
 
 
 def cmd_start(dev, args):

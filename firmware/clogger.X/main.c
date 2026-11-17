@@ -80,6 +80,39 @@ static void enterStandby(void);
 static volatile bool s_usb_check = false;
 static void usbSuspendHandler(void);
 static void checkUsbUnplugged(void);
+static void usbStart(void);
+static void usbHeartbeat(void);
+
+// SOF (ホストが 1ms ごとに送る) がこの秒数来なければ、USB が抜かれていないか確かめる。
+// 未エニュメレーションのまま放置、PC のスリープ、USB スタックの停止のどれでも働く。
+#define USB_NO_SOF_CHECK_SEC  10
+
+// ウォッチドッグ。USB通信モードの間だけ有効にする (フューズでは無効。リセットすると無効に戻る)。
+// 待機 (POWER-DOWN) と記録 (STANDBY) では使わない: 起床が増えて電池を消耗するため。
+static void watchdogSet(uint8_t period)
+{
+    while (WDT.STATUS & WDT_SYNCBUSY_bm) ;
+    _PROTECTED_WRITE(WDT.CTRLA, period);
+}
+
+// 不具合の調査用の記録 (get_diag で返す)。.noinit に置き、ソフトウェアリセットや
+// ウォッチドッグのリセットをまたいで残す。電源を入れ直すと消える。
+#define DIAG_MAGIC  0xC10Du
+static Diag_t s_diag __attribute__((section(".noinit")));
+
+const Diag_t *Diag_Get(void) { return &s_diag; }
+
+static void diagBoot(void)
+{
+    uint8_t rstfr = RSTCTRL.RSTFR;
+    RSTCTRL.RSTFR = rstfr; // 読んだ要因を消す (1 を書くと消える)
+    if (s_diag.magic != DIAG_MAGIC || (rstfr & (RSTCTRL_PORF_bm | RSTCTRL_BORF_bm)))
+    {
+        s_diag = (Diag_t){ .magic = DIAG_MAGIC };
+    }
+    s_diag.rstfr = rstfr;
+    if ((rstfr & RSTCTRL_WDRF_bm) && s_diag.wdt_resets < 255) s_diag.wdt_resets++;
+}
 
 // </editor-fold>
 
@@ -88,15 +121,18 @@ static void checkUsbUnplugged(void);
 int main(void)
 {
     SYSTEM_Initialize();   // クロック / ピン(LED,RST) / ADC / I2C / SPI / USB / RTC 等
+    diagBoot();
 
     // USB(VBUS)が本当に接続されているかを確かめる。
     // SYSTEM_Initialize は USB をバスに attach する。attach すると D+ のプルアップ電圧が
     // ESD保護(USBLC6)のダイオード経由で VBUS に回り込み、電池だけでも UDTC が High(約1.6V)になる。
-    // そこで一度 detach して回り込みが抜けるのを待ってから UDTC を読み、接続時だけ USB を有効に戻す。
+    // そこで一度 detach して回り込みが抜けるのを待ってから UDTC を読む。
+    // attach し直すのはメインループの直前 (この関数の末尾)。attach するとホストは 100ms 余りで
+    // バスリセットと最初の要求を送ってくるので、それまでにポーリングを始めていないと、リセットと
+    // 要求が溜まって処理の順が逆になる (要求に応答を用意した直後に古いリセットを処理して切断する)。
     USB_Comm_Disable();
     DELAY_milliseconds(200);   // VBUS の放電待ち (VBUS の 1uF と分圧抵抗で時定数 約40ms)
     s_usb_active = UDTC_GetValue() != 0;
-    if (s_usb_active) USBDevice_Initialize(); // USB を有効化して attach し直す
 
     // SPIモジュールを有効化 (内蔵フラッシュ W25Q128 用)
     SPI0_Open(SPI0_DEFAULT);
@@ -141,9 +177,12 @@ int main(void)
     sei();
     DELAY_milliseconds(100);
 
-    // USB仮想シリアル通信の初期化 (CDC層。USBデバイス層はSYSTEM_Initializeで初期化済み)
-    USB_Comm_Initialize();
-    USB_SuspendCallbackRegister(usbSuspendHandler);
+    // USB が接続されていれば、ここで attach して通信を始める (直後からメインループでポーリングする)。
+    if (s_usb_active)
+    {
+        usbStart();
+        watchdogSet(WDT_PERIOD_8KCLK_gc); // 約8秒。USB_Comm_Pump が払う
+    }
 
     // 10秒以上電圧不足が継続したら終了 (フラッシュ書込み中の電池切れによる破損を防ぐ)
     while (lowBattery_timer <= 10)
@@ -172,17 +211,27 @@ int main(void)
             {
                 // USB通信モード: USBをポーリングしてコマンドを処理する。
                 USB_Comm_Task();
+                if (isLogging) continue; // start_logging を受けた: USB は止めてある
+
+                // USB スタックがエラーで止まった (止まると自分では戻らない): 記録して USB を作り直す。
+                int8_t fault = USB_Comm_Fault();
+                if (fault != 0)
+                {
+                    s_diag.usb_err = fault;
+                    if (s_diag.usb_errs < 255) s_diag.usb_errs++;
+                    s_usb_check = true;
+                }
 
                 // USB が抜かれたら待機に戻る。抜いても D+ のプルアップが VBUS に回り込んで UDTC が
                 // High のままになることがあるので、UDTC の立ち下がりだけでは分からない。
                 // 抜けた疑いがあるとき (エニュメレーション後の Suspend / UDTC の立ち下がり /
-                // エニュメレーションされないまま10秒) に、起動時と同じ方法で確かめる。
-                static uint8_t unconfigured_sec = 0;
+                // SOF が10秒来ない) に、起動時と同じ方法で確かめる。
+                static uint8_t no_sof_sec = 0;
                 if (process_usb_sec)
                 {
                     process_usb_sec = false;
-                    if (USB0.ADDR == 0) { if (++unconfigured_sec >= 10) { unconfigured_sec = 0; s_usb_check = true; } }
-                    else unconfigured_sec = 0;
+                    if (USB_Comm_SofSeen()) no_sof_sec = 0;
+                    else if (++no_sof_sec >= USB_NO_SOF_CHECK_SEC) { no_sof_sec = 0; s_usb_check = true; }
                 }
                 if (s_usb_check)
                 {
@@ -250,9 +299,29 @@ static void checkUsbUnplugged(void)
     USB_Comm_Disable();
     DELAY_milliseconds(200);
     if (!UDTC_GetValue()) _PROTECTED_WRITE(RSTCTRL.SWRR, RSTCTRL_SWRST_bm);
+    usbStart();
+}
+
+// USB を初期化して attach する (USB_Comm_Disable で止めた後の作り直しにも使う)。
+// 呼んだらすぐにポーリング (USB_Comm_Task) を始めること。
+static void usbStart(void)
+{
     USBDevice_Initialize();
     USB_Comm_Initialize();
     USB_SuspendCallbackRegister(usbSuspendHandler);
+}
+
+// USB通信モードの生存表示: 1秒ごとに短く1回点滅する。点灯している間も USB のポーリングを続ける
+// (止めると、その間に来たバスリセットと要求の処理の順が逆になることがある)。
+static void usbHeartbeat(void)
+{
+    turnOnGreenLED();
+    for (uint8_t i = 0; i < LED_HB_PULSE_MS; i++)
+    {
+        if (s_usb_active) USB_Comm_Pump();
+        DELAY_milliseconds(1);
+    }
+    turnOffGreenLED();
 }
 
 // RSTボタンのエッジ割り込み (PD6両エッジ)。押下/解放へ即時反応してLEDを点灯/消灯する。
@@ -292,7 +361,7 @@ void executeSecondlyTask(void)
     {
         reset_timer = 0;
         if (isLogging) turnOffGreenLED();          // 計測モード: 消灯
-        else           blinkGreenLEDHeartbeat();   // USB通信モード: 1秒ごとに1回点滅(省電力)
+        else           usbHeartbeat();             // USB通信モード: 1秒ごとに1回点滅(省電力)
     }
 
     // --- 計測 (非ブロッキング, 省電力のためLEDは点滅させない) -------------
@@ -354,6 +423,8 @@ void setLoggingActive(bool on)
 {
     if (on)
     {
+        // 記録中はウォッチドッグを使わない (この後 USB を止めて STANDBY で眠るため)
+        watchdogSet(0);
         // ロギング開始時にSTCC4初期化。
         // (boot時ではなくここで行うことで、USB通信モードをI2C非依存にし確実に列挙させる)
         Measurement_Initialize();
@@ -457,6 +528,7 @@ uint32_t Device_GetID(void)
 void showError(short int errNum)
 {
     (void)errNum;
+    watchdogSet(0);
     while(true)
     {
         blinkGreenLED(1);

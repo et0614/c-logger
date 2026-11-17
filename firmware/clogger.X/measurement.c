@@ -4,6 +4,7 @@
 #include "i2c_master.h"
 #include "crc.h"
 #include "mcc_generated_files/timer/delay.h"
+#include <avr/wdt.h> // wdt_reset
 
 // STCC4 single-shot 計測の完了待ち時間 [ms] (datasheet: 約500ms)
 #define STCC4_SINGLE_SHOT_MS  500
@@ -230,6 +231,7 @@ void Measurement_ClearData(void)
         uint32_t lastAddr = W25_GetAddressFromRecordIndex(n - 1);
         for (uint32_t addr = DATA_START_ADDR; addr <= lastAddr; addr += 4096)
         {
+            wdt_reset(); // 消去は長くかかる (データが多いと数分)。USB通信モードのウォッチドッグを払う
             W25_SectorErase(addr);
         }
     }
