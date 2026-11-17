@@ -38,7 +38,7 @@ software/               PCツール: clogger_gui.py (GUI)、clogger.py (コマ�
 ## バージョン
 
 - 基板: 3.1（シルク表記「Version 3.1」）。修正ごとに 3.1, 3.2 … と上げる。履歴は `hardware/fab/README.md`
-- ファームウェア: 3.3.0（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
+- ファームウェア: 3.3.8（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
 
 ## 配布 (GitHub Releases)
 
@@ -65,7 +65,7 @@ GitHub Actions が `CLogger_vX.Y.Z.zip`（CLogger.exe（avrdude 同梱）、フ�
 - **USB**: Type-C（シェル足はスルーホールの長穴、PTH 指定）。CC1・CC2 は集合抵抗 RN1 を2個並列にして 5.0kΩ で GND へ。ESD 保護 USBLC6 互換 (U4)
 - **CO2あり/なし版**: SHT40 は STCC4 のセンサ用 I2C（SDA_C/SCL_C）につながる。CO2なし版は STCC4 を載せず、R7・R8 (0Ω) で SDA/SCL を SDA_C/SCL_C に直結する。**STCC4 と R7・R8 を同時に実装しない**（STCC4 は SDA_C/SCL_C 側の I2C の親なので、親が2つになり通信できない）。SDA_C/SCL_C には STCC4 内蔵の 10k プルアップがある
 - **SHT40 は必ず AD1B（I2C アドレス 0x44）**。STCC4 は 0x44 の SHT4x しか読まない
-- **ピン割り当て**: LED=PD5、ボタン=PD6、フラッシュ CS=PA1、VBAT=PF5 (AIN21)、UDTC=PD2（基板3.1。基板3.0 は PF2。**ファームウェアはまだ PF2 のまま**）、I2C=PA2/PA3、SPI=PA4/PA5/PA6、32kHz 水晶=PF0/PF1。未使用ピンは入力バッファを無効にする
+- **ピン割り当て**: LED=PD5、ボタン=PD6、フラッシュ CS=PA1、VBAT=PF5 (AIN21)、UDTC=PD2（基板3.1 から。基板3.0 は PF2 で、ファームウェア 3.3.8 以降は使えない）、I2C=PA2/PA3、SPI=PA4/PA5/PA6、32kHz 水晶=PF0/PF1。未使用ピンは入力バッファを無効にする
 - **水晶**: FC-135（CL=12.5pF）。負荷容量 C4・C5 は 2×(CL−浮遊容量 2〜5pF) から 18pF。水晶の個体差（±20ppm）は、RTC の水晶誤差補正（RTC.CALIB、1ppm 単位）で1台ずつ合わせる。補正値は EEPROM に保存し、起動時に設定する（`get_clock_calib` / `set_clock_calib`、PCツールの Clock タブ）
 
 ### 基板
@@ -75,9 +75,13 @@ GitHub Actions が `CLogger_vX.Y.Z.zip`（CLogger.exe（avrdude 同梱）、フ�
 ## 開発メモ
 
 - **USB**: AVR64DU のエラッタ 2.8.1（マルチパケット OUT 転送は偶数アドレス必須）を `usb_comm.c` で回避している（K-Logger と同じ）。
+- **USB のクロック**: 内蔵発振器 OSCHF は USB の SOF に合わせて自動補正する（MCC の Clock Control で Auto-tune = USB SOF、`CLKCTRL_AUTOTUNE_SOF_gc`）。補正しないとフルスピード USB に必要な精度（±0.25%）を外れることがあり、チップの個体差で「記述子要求の失敗」「シリアル番号が読めない」「COM ポートは出るが通信できない」などが時々起きる（基板3.1 の試作で発生し、3.3.8 で解消）。ブートローダ（euboot）はまだ補正していない。
+- **USB の既知の問題**（3.3.8 時点、未対策）: (1) 抜き差しを短い間隔で繰り返すと、まれに COM ポートが開けるまで30秒ほどかかる（Windows 側の待ちの可能性）。(2) 接続したまま PC がロック・スリープすると、復帰後に本体が応答しなくなることがある。このとき USB を抜いても待機に戻らない（電池を外すと戻る）。MCC の USB スタックは一度エラーを返すと以後の処理を止める（`usb_device.c` の `usbStatus`）ので、それが原因と推定しているが未確認。
+- **USB の試験**: 書き込んだら PICkit を外してから試す（UPDI につないだままだと起動や USB が正常に動かない）。抜き差しは条件ごとに5回以上試して数える。
 - **USB 接続の検出**: 電池で動いているときに USB を attach すると、D+ のプルアップ電圧が ESD 保護 (USBLC6) のダイオード経由で VBUS に回り込み、UDTC が High に見える。起動時に一度 detach してから UDTC を読み、USB が本当に接続されているときだけ USB を有効にする。
-- **CO2あり/なしの判定**: 起動後の初回計測時に STCC4 (0x64) の応答で判定する。CO2なし版は R7・R8 (0Ω) で SHT40 (0x44) をホストの I2C に直結し、直接読む。記録の co2_ppm は 0xFFFE。
+- **CO2あり/なしの判定**: 起動後の初回計測時に STCC4 (0x64) の応答で判定する。CO2なし版は R7・R8 (0Ω) で SHT40 (0x44) をホストの I2C に直結し、直接読む。記録の co2_ppm は 0xFFFE。同じ基板で、STCC4 か R7・R8 のどちらかを実装すれば両方の版になる（基板3.1 で両方確認済み）。
 - **待機**: 電池のみで記録していないときは POWER-DOWN スリープ。フラッシュも Power-down にする（起動時に必ず復帰命令を送る）。起床はボタン (PD6) と USB 接続 (UDTC) のみ。USB を抜くと（エニュメレーション後の Suspend、UDTC の立ち下がり、または未エニュメレーションのまま10秒）、起動時と同じく detach してから UDTC を確かめ、外れていればリセットして待機に戻る。
 - **記録中のフラッシュ**: 書き込むときだけ Power-down から起こし、書き込みが終わったら Power-down に戻す（待機電流 typ 10uA → 1uA）。
 - **EEPROM**: 計測設定（記録間隔・記録開始日時）と校正値（温度・湿度・CO2 の補正係数 a・b、時計の補正値）の2ブロック。それぞれ CRC 付きで、壊れたブロックだけ既定値に戻す。並びを変えたら `eeprom_manager.c` の `EM_LAYOUT_VERSION` を上げる（起動時に全体を初期化し直す）。
-- **測定値の補正**: フラッシュには生値を記録し、補正係数（補正後 = a × 生値 + b）は EEPROM に保存して PC ツールが読み出し時に適用する（係数を後から直しても過去のデータに使え、生値も残る）。CO2 はこのほか STCC4 の強制校正（FRC、`co2_frc`）も使える。FRC の前には single shot を30回以上（STCC4 の手順）。
+- **測定値の補正**: フラッシュには生値を記録し、補正係数（補正後 = a × 生値 + b）は EEPROM に保存して PC ツールが読み出し時に適用する（係数を後から直しても過去のデータに使え、生値も残る）。CO2 はこのほか STCC4 の強制校正（FRC、`co2_frc`）も使える。FRC の前には single shot を30回以上（STCC4 の手順）。FRC の応答の補正量（返り値 − 32768）は、実際の変化と合わないことがある（380→約430 ppm で +1250）。換算はデータシートで要確認。
+- **ADC**: 変換の完了は ADCBUSY ではなく RESRDY フラグで待つ（開始直後は BUSY がまだ立たず、前回の結果を読むことがある）。

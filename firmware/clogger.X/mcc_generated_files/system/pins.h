@@ -247,24 +247,24 @@
 #define IO_PD1_EnableInterruptForLowLevelSensing() do { PORTD.PIN1CTRL = (PORTD.PIN1CTRL & ~PORT_ISC_gm) | 0x5 ; } while(0)
 #define PD1_SetInterruptHandler IO_PD1_SetInterruptHandler
 
-//get/set IO_PD2 aliases
-#define IO_PD2_SetHigh() do { PORTD_OUTSET = 0x4; } while(0)
-#define IO_PD2_SetLow() do { PORTD_OUTCLR = 0x4; } while(0)
-#define IO_PD2_Toggle() do { PORTD_OUTTGL = 0x4; } while(0)
-#define IO_PD2_GetValue() (VPORTD.IN & (0x1 << 2))
-#define IO_PD2_SetDigitalInput() do { PORTD_DIRCLR = 0x4; } while(0)
-#define IO_PD2_SetDigitalOutput() do { PORTD_DIRSET = 0x4; } while(0)
-#define IO_PD2_SetPullUp() do { PORTD_PIN2CTRL  |= PORT_PULLUPEN_bm; } while(0)
-#define IO_PD2_ResetPullUp() do { PORTD_PIN2CTRL  &= ~PORT_PULLUPEN_bm; } while(0)
-#define IO_PD2_SetInverted() do { PORTD_PIN2CTRL  |= PORT_INVEN_bm; } while(0)
-#define IO_PD2_ResetInverted() do { PORTD_PIN2CTRL  &= ~PORT_INVEN_bm; } while(0)
-#define IO_PD2_DisableInterruptOnChange() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x0 ; } while(0)
-#define IO_PD2_EnableInterruptForBothEdges() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x1 ; } while(0)
-#define IO_PD2_EnableInterruptForRisingEdge() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x2 ; } while(0)
-#define IO_PD2_EnableInterruptForFallingEdge() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x3 ; } while(0)
-#define IO_PD2_DisableDigitalInputBuffer() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x4 ; } while(0)
-#define IO_PD2_EnableInterruptForLowLevelSensing() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x5 ; } while(0)
-#define PD2_SetInterruptHandler IO_PD2_SetInterruptHandler
+//get/set UDTC aliases
+#define UDTC_SetHigh() do { PORTD_OUTSET = 0x4; } while(0)
+#define UDTC_SetLow() do { PORTD_OUTCLR = 0x4; } while(0)
+#define UDTC_Toggle() do { PORTD_OUTTGL = 0x4; } while(0)
+#define UDTC_GetValue() (VPORTD.IN & (0x1 << 2))
+#define UDTC_SetDigitalInput() do { PORTD_DIRCLR = 0x4; } while(0)
+#define UDTC_SetDigitalOutput() do { PORTD_DIRSET = 0x4; } while(0)
+#define UDTC_SetPullUp() do { PORTD_PIN2CTRL  |= PORT_PULLUPEN_bm; } while(0)
+#define UDTC_ResetPullUp() do { PORTD_PIN2CTRL  &= ~PORT_PULLUPEN_bm; } while(0)
+#define UDTC_SetInverted() do { PORTD_PIN2CTRL  |= PORT_INVEN_bm; } while(0)
+#define UDTC_ResetInverted() do { PORTD_PIN2CTRL  &= ~PORT_INVEN_bm; } while(0)
+#define UDTC_DisableInterruptOnChange() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x0 ; } while(0)
+#define UDTC_EnableInterruptForBothEdges() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x1 ; } while(0)
+#define UDTC_EnableInterruptForRisingEdge() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x2 ; } while(0)
+#define UDTC_EnableInterruptForFallingEdge() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x3 ; } while(0)
+#define UDTC_DisableDigitalInputBuffer() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x4 ; } while(0)
+#define UDTC_EnableInterruptForLowLevelSensing() do { PORTD.PIN2CTRL = (PORTD.PIN2CTRL & ~PORT_ISC_gm) | 0x5 ; } while(0)
+#define PD2_SetInterruptHandler UDTC_SetInterruptHandler
 
 //get/set IO_PD3 aliases
 #define IO_PD3_SetHigh() do { PORTD_OUTSET = 0x8; } while(0)
@@ -380,24 +380,24 @@
 #define IO_PF1_EnableInterruptForLowLevelSensing() do { PORTF.PIN1CTRL = (PORTF.PIN1CTRL & ~PORT_ISC_gm) | 0x5 ; } while(0)
 #define PF1_SetInterruptHandler IO_PF1_SetInterruptHandler
 
-//get/set UDTC aliases
-#define UDTC_SetHigh() do { PORTF_OUTSET = 0x4; } while(0)
-#define UDTC_SetLow() do { PORTF_OUTCLR = 0x4; } while(0)
-#define UDTC_Toggle() do { PORTF_OUTTGL = 0x4; } while(0)
-#define UDTC_GetValue() (VPORTF.IN & (0x1 << 2))
-#define UDTC_SetDigitalInput() do { PORTF_DIRCLR = 0x4; } while(0)
-#define UDTC_SetDigitalOutput() do { PORTF_DIRSET = 0x4; } while(0)
-#define UDTC_SetPullUp() do { PORTF_PIN2CTRL  |= PORT_PULLUPEN_bm; } while(0)
-#define UDTC_ResetPullUp() do { PORTF_PIN2CTRL  &= ~PORT_PULLUPEN_bm; } while(0)
-#define UDTC_SetInverted() do { PORTF_PIN2CTRL  |= PORT_INVEN_bm; } while(0)
-#define UDTC_ResetInverted() do { PORTF_PIN2CTRL  &= ~PORT_INVEN_bm; } while(0)
-#define UDTC_DisableInterruptOnChange() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x0 ; } while(0)
-#define UDTC_EnableInterruptForBothEdges() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x1 ; } while(0)
-#define UDTC_EnableInterruptForRisingEdge() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x2 ; } while(0)
-#define UDTC_EnableInterruptForFallingEdge() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x3 ; } while(0)
-#define UDTC_DisableDigitalInputBuffer() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x4 ; } while(0)
-#define UDTC_EnableInterruptForLowLevelSensing() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x5 ; } while(0)
-#define PF2_SetInterruptHandler UDTC_SetInterruptHandler
+//get/set IO_PF2 aliases
+#define IO_PF2_SetHigh() do { PORTF_OUTSET = 0x4; } while(0)
+#define IO_PF2_SetLow() do { PORTF_OUTCLR = 0x4; } while(0)
+#define IO_PF2_Toggle() do { PORTF_OUTTGL = 0x4; } while(0)
+#define IO_PF2_GetValue() (VPORTF.IN & (0x1 << 2))
+#define IO_PF2_SetDigitalInput() do { PORTF_DIRCLR = 0x4; } while(0)
+#define IO_PF2_SetDigitalOutput() do { PORTF_DIRSET = 0x4; } while(0)
+#define IO_PF2_SetPullUp() do { PORTF_PIN2CTRL  |= PORT_PULLUPEN_bm; } while(0)
+#define IO_PF2_ResetPullUp() do { PORTF_PIN2CTRL  &= ~PORT_PULLUPEN_bm; } while(0)
+#define IO_PF2_SetInverted() do { PORTF_PIN2CTRL  |= PORT_INVEN_bm; } while(0)
+#define IO_PF2_ResetInverted() do { PORTF_PIN2CTRL  &= ~PORT_INVEN_bm; } while(0)
+#define IO_PF2_DisableInterruptOnChange() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x0 ; } while(0)
+#define IO_PF2_EnableInterruptForBothEdges() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x1 ; } while(0)
+#define IO_PF2_EnableInterruptForRisingEdge() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x2 ; } while(0)
+#define IO_PF2_EnableInterruptForFallingEdge() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x3 ; } while(0)
+#define IO_PF2_DisableDigitalInputBuffer() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x4 ; } while(0)
+#define IO_PF2_EnableInterruptForLowLevelSensing() do { PORTF.PIN2CTRL = (PORTF.PIN2CTRL & ~PORT_ISC_gm) | 0x5 ; } while(0)
+#define PF2_SetInterruptHandler IO_PF2_SetInterruptHandler
 
 //get/set IO_PF3 aliases
 #define IO_PF3_SetHigh() do { PORTF_OUTSET = 0x8; } while(0)
@@ -754,24 +754,24 @@ void IO_PD1_SetInterruptHandler(void (* interruptHandler)(void)) ;
 
 /**
  * @ingroup  pinsdriver
- * @brief Default Interrupt Handler for IO_PD2 pin. 
- *        This is a predefined interrupt handler to be used together with the IO_PD2_SetInterruptHandler() method.
- *        This handler is called every time the IO_PD2 ISR is executed. 
+ * @brief Default Interrupt Handler for UDTC pin. 
+ *        This is a predefined interrupt handler to be used together with the UDTC_SetInterruptHandler() method.
+ *        This handler is called every time the UDTC ISR is executed. 
  * @pre PIN_MANAGER_Initialize() has been called at least once
  * @param none
  * @return none
  */
-void IO_PD2_DefaultInterruptHandler(void);
+void UDTC_DefaultInterruptHandler(void);
 
 /**
  * @ingroup  pinsdriver
- * @brief Interrupt Handler Setter for IO_PD2 pin input-sense-config functionality.
- *        Allows selecting an interrupt handler for IO_PD2 at application runtime
+ * @brief Interrupt Handler Setter for UDTC pin input-sense-config functionality.
+ *        Allows selecting an interrupt handler for UDTC at application runtime
  * @pre PIN_MANAGER_Initialize() has been called at least once
  * @param InterruptHandler function pointer.
  * @return none
  */
-void IO_PD2_SetInterruptHandler(void (* interruptHandler)(void)) ; 
+void UDTC_SetInterruptHandler(void (* interruptHandler)(void)) ; 
 
 /**
  * @ingroup  pinsdriver
@@ -901,24 +901,24 @@ void IO_PF1_SetInterruptHandler(void (* interruptHandler)(void)) ;
 
 /**
  * @ingroup  pinsdriver
- * @brief Default Interrupt Handler for UDTC pin. 
- *        This is a predefined interrupt handler to be used together with the UDTC_SetInterruptHandler() method.
- *        This handler is called every time the UDTC ISR is executed. 
+ * @brief Default Interrupt Handler for IO_PF2 pin. 
+ *        This is a predefined interrupt handler to be used together with the IO_PF2_SetInterruptHandler() method.
+ *        This handler is called every time the IO_PF2 ISR is executed. 
  * @pre PIN_MANAGER_Initialize() has been called at least once
  * @param none
  * @return none
  */
-void UDTC_DefaultInterruptHandler(void);
+void IO_PF2_DefaultInterruptHandler(void);
 
 /**
  * @ingroup  pinsdriver
- * @brief Interrupt Handler Setter for UDTC pin input-sense-config functionality.
- *        Allows selecting an interrupt handler for UDTC at application runtime
+ * @brief Interrupt Handler Setter for IO_PF2 pin input-sense-config functionality.
+ *        Allows selecting an interrupt handler for IO_PF2 at application runtime
  * @pre PIN_MANAGER_Initialize() has been called at least once
  * @param InterruptHandler function pointer.
  * @return none
  */
-void UDTC_SetInterruptHandler(void (* interruptHandler)(void)) ; 
+void IO_PF2_SetInterruptHandler(void (* interruptHandler)(void)) ; 
 
 /**
  * @ingroup  pinsdriver

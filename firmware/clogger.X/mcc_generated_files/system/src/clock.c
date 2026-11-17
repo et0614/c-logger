@@ -47,7 +47,7 @@ void CLOCK_Initialize(void)
             );
     ccp_write_io((void*)&(CLKCTRL.OSC32KCTRLA),(0 << CLKCTRL_RUNSTDBY_bp)   // RUNSTDBY disabled
             );
-    ccp_write_io((void*)&(CLKCTRL.OSCHFCTRLA),CLKCTRL_AUTOTUNE_OFF_gc   // AUTOTUNE OFF
+    ccp_write_io((void*)&(CLKCTRL.OSCHFCTRLA),CLKCTRL_AUTOTUNE_SOF_gc   // AUTOTUNE SOF
             | CLKCTRL_FRQSEL_12M_gc   // FRQSEL 12 MHz system clock
             | (0 << CLKCTRL_RUNSTDBY_bp)   // RUNSTDBY disabled
             | CLKCTRL_ALGSEL_BIN_gc   // ALGSEL BIN

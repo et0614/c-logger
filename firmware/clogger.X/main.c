@@ -125,7 +125,7 @@ int main(void)
     // プルアップと両エッジ割り込みは MCC で設定済み。
     RST_SetInterruptHandler(rstButtonHandler);
 
-    // USB接続の検出(UDTC=PF2, 両エッジ割り込みは MCC で設定済み。完全非同期ピンなので STANDBY 中でも起床する)。
+    // USB接続の検出(UDTC=PD2, 両エッジ割り込みは MCC で設定済み。完全非同期ピンなので STANDBY 中でも起床する)。
     // USB の初期化は起動時だけなので、電池で起動した後に USB を挿したらリセットして起動し直す。
     UDTC_SetInterruptHandler(udtcHandler);
 
@@ -193,7 +193,7 @@ int main(void)
             else
             {
                 // 待機(電池のみ・記録していない): POWER-DOWN スリープで電池の消耗を抑える。
-                // 起きるのはボタン(PD6: 押している間 LED 点灯)と USB 接続(PF2: リセットして USB通信モードへ)だけ。
+                // 起きるのはボタン(PD6: 押している間 LED 点灯)と USB 接続(PD2: リセットして USB通信モードへ)だけ。
                 // どちらも完全非同期ピンなので POWER-DOWN からでも割り込みで起床できる。
                 if (!s_standby) enterStandby();
                 set_sleep_mode(SLEEP_MODE_PWR_DOWN);
@@ -412,8 +412,11 @@ uint16_t getBatteryVoltage_mV(void)
     ADC0_SetReferenceVoltage(ADC_VREF_VDD);
     ADC0_SampleRepeatCountSet(ADC_8_SAMPLES_ACCUMULATED);
     ADC0_ChannelSelect(VBAT);
+    // 完了は結果のフラグ (RESRDY) で待つ。変換中フラグ (ADCBUSY) は変換を始めた直後にはまだ立っていない
+    // ことがあり、それで待つと前回の結果を読んでしまう。
+    ADC0.INTFLAGS = ADC_RESRDY_bm;            // 前回の結果のフラグを消す
     ADC0_ConversionStart();
-    while(!ADC0_IsConversionDone());
+    while (!(ADC0.INTFLAGS & ADC_RESRDY_bm)); // 8回の積算が終わるまで待つ
     adc_accumulate_t acc_val = ADC0_AccumulatedResultGet();
 
     // 10bit ADC * 8 回積算 → 0..8192 のレンジ。基準 3.3V (= 3300mV)

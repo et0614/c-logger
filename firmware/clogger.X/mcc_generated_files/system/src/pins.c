@@ -45,14 +45,14 @@ static void (*IO_PA7_InterruptHandler)(void);
 static void (*IO_PC3_InterruptHandler)(void);
 static void (*IO_PD0_InterruptHandler)(void);
 static void (*IO_PD1_InterruptHandler)(void);
-static void (*IO_PD2_InterruptHandler)(void);
+static void (*UDTC_InterruptHandler)(void);
 static void (*IO_PD3_InterruptHandler)(void);
 static void (*IO_PD4_InterruptHandler)(void);
 static void (*RST_InterruptHandler)(void);
 static void (*IO_PD7_InterruptHandler)(void);
 static void (*IO_PF0_InterruptHandler)(void);
 static void (*IO_PF1_InterruptHandler)(void);
-static void (*UDTC_InterruptHandler)(void);
+static void (*IO_PF2_InterruptHandler)(void);
 static void (*IO_PF3_InterruptHandler)(void);
 static void (*IO_PF4_InterruptHandler)(void);
 static void (*IO_PF6_InterruptHandler)(void);
@@ -94,7 +94,7 @@ void PIN_MANAGER_Initialize()
     PORTC.PIN7CTRL = 0x0;
     PORTD.PIN0CTRL = 0x4;
     PORTD.PIN1CTRL = 0x4;
-    PORTD.PIN2CTRL = 0x4;
+    PORTD.PIN2CTRL = 0x1;
     PORTD.PIN3CTRL = 0x4;
     PORTD.PIN4CTRL = 0x4;
     PORTD.PIN5CTRL = 0x0;
@@ -102,7 +102,7 @@ void PIN_MANAGER_Initialize()
     PORTD.PIN7CTRL = 0x4;
     PORTF.PIN0CTRL = 0x4;
     PORTF.PIN1CTRL = 0x4;
-    PORTF.PIN2CTRL = 0x1;
+    PORTF.PIN2CTRL = 0x4;
     PORTF.PIN3CTRL = 0x4;
     PORTF.PIN4CTRL = 0x4;
     PORTF.PIN5CTRL = 0x4;
@@ -130,14 +130,14 @@ void PIN_MANAGER_Initialize()
     IO_PC3_SetInterruptHandler(IO_PC3_DefaultInterruptHandler);
     IO_PD0_SetInterruptHandler(IO_PD0_DefaultInterruptHandler);
     IO_PD1_SetInterruptHandler(IO_PD1_DefaultInterruptHandler);
-    IO_PD2_SetInterruptHandler(IO_PD2_DefaultInterruptHandler);
+    UDTC_SetInterruptHandler(UDTC_DefaultInterruptHandler);
     IO_PD3_SetInterruptHandler(IO_PD3_DefaultInterruptHandler);
     IO_PD4_SetInterruptHandler(IO_PD4_DefaultInterruptHandler);
     RST_SetInterruptHandler(RST_DefaultInterruptHandler);
     IO_PD7_SetInterruptHandler(IO_PD7_DefaultInterruptHandler);
     IO_PF0_SetInterruptHandler(IO_PF0_DefaultInterruptHandler);
     IO_PF1_SetInterruptHandler(IO_PF1_DefaultInterruptHandler);
-    UDTC_SetInterruptHandler(UDTC_DefaultInterruptHandler);
+    IO_PF2_SetInterruptHandler(IO_PF2_DefaultInterruptHandler);
     IO_PF3_SetInterruptHandler(IO_PF3_DefaultInterruptHandler);
     IO_PF4_SetInterruptHandler(IO_PF4_DefaultInterruptHandler);
     IO_PF6_SetInterruptHandler(IO_PF6_DefaultInterruptHandler);
@@ -290,17 +290,17 @@ void IO_PD1_DefaultInterruptHandler(void)
     // or set custom function using IO_PD1_SetInterruptHandler()
 }
 /**
-  Allows selecting an interrupt handler for IO_PD2 at application runtime
+  Allows selecting an interrupt handler for UDTC at application runtime
 */
-void IO_PD2_SetInterruptHandler(void (* interruptHandler)(void)) 
+void UDTC_SetInterruptHandler(void (* interruptHandler)(void)) 
 {
-    IO_PD2_InterruptHandler = interruptHandler;
+    UDTC_InterruptHandler = interruptHandler;
 }
 
-void IO_PD2_DefaultInterruptHandler(void)
+void UDTC_DefaultInterruptHandler(void)
 {
-    // add your IO_PD2 interrupt custom code
-    // or set custom function using IO_PD2_SetInterruptHandler()
+    // add your UDTC interrupt custom code
+    // or set custom function using UDTC_SetInterruptHandler()
 }
 /**
   Allows selecting an interrupt handler for IO_PD3 at application runtime
@@ -381,17 +381,17 @@ void IO_PF1_DefaultInterruptHandler(void)
     // or set custom function using IO_PF1_SetInterruptHandler()
 }
 /**
-  Allows selecting an interrupt handler for UDTC at application runtime
+  Allows selecting an interrupt handler for IO_PF2 at application runtime
 */
-void UDTC_SetInterruptHandler(void (* interruptHandler)(void)) 
+void IO_PF2_SetInterruptHandler(void (* interruptHandler)(void)) 
 {
-    UDTC_InterruptHandler = interruptHandler;
+    IO_PF2_InterruptHandler = interruptHandler;
 }
 
-void UDTC_DefaultInterruptHandler(void)
+void IO_PF2_DefaultInterruptHandler(void)
 {
-    // add your UDTC interrupt custom code
-    // or set custom function using UDTC_SetInterruptHandler()
+    // add your IO_PF2 interrupt custom code
+    // or set custom function using IO_PF2_SetInterruptHandler()
 }
 /**
   Allows selecting an interrupt handler for IO_PF3 at application runtime
@@ -534,7 +534,7 @@ ISR(PORTD_PORT_vect)
     }
     if(VPORTD.INTFLAGS & PORT_INT2_bm)
     {
-       IO_PD2_InterruptHandler(); 
+       UDTC_InterruptHandler(); 
     }
     if(VPORTD.INTFLAGS & PORT_INT3_bm)
     {
@@ -577,7 +577,7 @@ ISR(PORTF_PORT_vect)
     }
     if(VPORTF.INTFLAGS & PORT_INT2_bm)
     {
-       UDTC_InterruptHandler(); 
+       IO_PF2_InterruptHandler(); 
     }
     if(VPORTF.INTFLAGS & PORT_INT3_bm)
     {
