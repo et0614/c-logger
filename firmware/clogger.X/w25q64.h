@@ -74,6 +74,18 @@ uint32_t W25_GetAddressFromRecordIndex(uint32_t index);
 void W25_SectorErase(uint32_t address);
 
 /**
+ * @brief 指定した物理アドレスの64KBブロックを消去する (typ 150ms、最大 2秒)
+ * @param address 物理アドレス (65536の倍数)
+ */
+void W25_BlockErase(uint32_t address);
+
+/**
+ * @brief 書き込み・消去の完了待ちの間に繰り返し呼ぶ関数を登録する (NULL で解除)。
+ *        USB のポーリングを続けるのに使う。
+ */
+void W25_SetBusyHook(void (*hook)(void));
+
+/**
  * @brief チップ全体を消去する (Chip Erase, 0xC7)。
  *        BUSY ビットが 0 になるまで blocking で待つため、typ 約 20 秒〜最大 100 秒戻らない。
  *        通常運用では呼ばない (erase_flash コマンドからのみ呼ばれる)。

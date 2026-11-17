@@ -37,6 +37,7 @@
 #include <avr/wdt.h>       // _PROTECTED_WRITE 提供のため
 #include <avr/sleep.h>     // set_sleep_mode / sleep_mode
 #include <avr/interrupt.h> // sei / cli
+#include <util/atomic.h>   // ATOMIC_BLOCK
 
 // </editor-fold>
 
@@ -55,13 +56,20 @@ static uint8_t reset_timer = 0;
 //計測(ロギング)モードか否か。false = USB通信モード(既定)。
 static bool isLogging = false;
 
-//ソフトウェア時計 (UNIX epoch秒)。set_timeコマンドで設定し、PIT(1秒)毎にインクリメント。
+//ソフトウェア時計 (UNIX epoch秒)。set_timeコマンドで設定し、PIT(1秒)の割り込みの中で進める。
+//(メインループで進めると、データの読み出しや消去でループが1秒以上ふさがったときに取りこぼす)
 //各レコードの時刻は start_dt + index*interval で復元するため start_dt の基準に使う。
-static uint32_t g_epoch = 0;
+static volatile uint32_t g_epoch = 0;
+
+// USB が動いているか (attach してポーリングしている)。フラッシュの消去待ちの間のポーリングに使う。
+static bool s_usb_running = false;
 
 //コンディショニング(長期未通電復帰用)の残り待ち秒数。start_logging時にセットし、PIT毎に
 //デクリメント。0になるまで計測を始めない(その間はPITスリープで時間を消化する)。
 static uint8_t conditioning_wait = 0;
+
+//CO2 センサの暖機の残り秒数。start_logging時にセットし、0になるまで窓の外でも毎秒計測する。
+static uint16_t co2_warmup_left = 0;
 
 //start_dt(1レコード目の時刻基準)を確定済みか。コンディショニング完了後の初回計測で確定する。
 static bool start_dt_set = false;
@@ -97,10 +105,20 @@ static void watchdogSet(uint8_t period)
 
 // 不具合の調査用の記録 (get_diag で返す)。.noinit に置き、ソフトウェアリセットや
 // ウォッチドッグのリセットをまたいで残す。電源を入れ直すと消える。
-#define DIAG_MAGIC  0xC10Du
+#define DIAG_MAGIC  0xC10Eu  // Diag_t の並びを変えたら変える
 static Diag_t s_diag __attribute__((section(".noinit")));
 
-const Diag_t *Diag_Get(void) { return &s_diag; }
+Diag_t *Diag_Get(void) { return &s_diag; }
+
+static void usbResetHandler(void)  { s_diag.bus_resets++; }
+static void usbResumeHandler(void) { s_diag.resumes++; }
+
+// フラッシュの書き込み・消去の完了待ちの間に呼ばれる。USB通信モードでは USB のポーリングを続ける
+// (消去は1回で最大2秒かかり、その間ホストの要求に応答できなくなるため)。
+static void flashBusyHook(void)
+{
+    if (s_usb_running && !isLogging) USB_Comm_Pump();
+}
 
 static void diagBoot(void)
 {
@@ -136,6 +154,7 @@ int main(void)
 
     // SPIモジュールを有効化 (内蔵フラッシュ W25Q128 用)
     SPI0_Open(SPI0_DEFAULT);
+    W25_SetBusyHook(flashBusyHook);
     // 待機中に Power-down にしたフラッシュは MCU のリセットでは戻らないので、必ず復帰させる
     W25_ReleasePowerDown();
 
@@ -180,6 +199,7 @@ int main(void)
     // USB が接続されていれば、ここで attach して通信を始める (直後からメインループでポーリングする)。
     if (s_usb_active)
     {
+        USB_Comm_SetSerial(Device_GetID()); // USB のシリアル番号を機体IDにする (全台同じ "1" だと2台つなげない)
         usbStart();
         watchdogSet(WDT_PERIOD_8KCLK_gc); // 約8秒。USB_Comm_Pump が払う
     }
@@ -263,6 +283,7 @@ int main(void)
 // 1秒ごとのコールバック関数 (PIT)
 void oneSecHandler(void)
 {
+    g_epoch++; // ソフトウェア時計を1秒進める
     process_logging_flag = true;
     process_usb_sec = true;
 }
@@ -274,6 +295,7 @@ static void enterStandby(void)
     RTC.PITINTCTRL = 0;               // 毎秒の起床(PIT)を止める。LED の生存表示もしない
     ADC0.CTRLA &= ~ADC_ENABLE_bm;     // ADC を止める
     W25_PowerDown();                  // フラッシュを Power-down に (待機電流 typ 10uA → 1uA)
+    Measurement_SensorPowerDown();    // CO2 センサを sleep に (電源投入後は idle 55uA のまま待っている → 1uA)
     s_standby = true;
 }
 
@@ -288,6 +310,7 @@ void udtcHandler(void)
 // エニュメレーション前 (アドレス未設定) の Suspend は無視する (未接続中の判定は10秒ごとに行う)。
 static void usbSuspendHandler(void)
 {
+    s_diag.suspends++;
     if (USB0.ADDR != 0) s_usb_check = true;
 }
 
@@ -296,6 +319,8 @@ static void usbSuspendHandler(void)
 // つながっていれば (PC のスリープなど) attach し直す。
 static void checkUsbUnplugged(void)
 {
+    if (s_diag.checks < 255) s_diag.checks++;
+    s_usb_running = false;
     USB_Comm_Disable();
     DELAY_milliseconds(200);
     if (!UDTC_GetValue()) _PROTECTED_WRITE(RSTCTRL.SWRR, RSTCTRL_SWRST_bm);
@@ -309,6 +334,9 @@ static void usbStart(void)
     USBDevice_Initialize();
     USB_Comm_Initialize();
     USB_SuspendCallbackRegister(usbSuspendHandler);
+    USB_ResetCallbackRegister(usbResetHandler);
+    USB_ResumeCallbackRegister(usbResumeHandler);
+    s_usb_running = true;
 }
 
 // USB通信モードの生存表示: 1秒ごとに短く1回点滅する。点灯している間も USB のポーリングを続ける
@@ -339,9 +367,6 @@ void executeSecondlyTask(void)
     //電圧確認（限界まで使うとFlashメモリのデータが破損することがある）
     if(isLowBattery()) lowBattery_timer++;
     else lowBattery_timer = 0;
-
-    //ソフトウェア時計を1秒進める
-    g_epoch++;
 
     // --- RSTボタン処理 & LED表示 -----------------------------------------
     //  ・押している間 : LED点灯 (計測できているか/生存の確認用)
@@ -388,6 +413,10 @@ void executeSecondlyTask(void)
             uint16_t w = (CO2_AVG_WINDOW_SEC < N) ? CO2_AVG_WINDOW_SEC : N; // 実効窓 = min(窓,間隔)
             uint16_t win_start = N - w;
 
+            // CO2 センサの暖機中 (記録開始から CO2_WARMUP_SEC 秒) は、窓の外でも毎秒計測を続ける。
+            bool warming = co2_warmup_left > 0;
+            if (warming) co2_warmup_left--;
+
             // 区間境界: 前区間の窓を締めて平均を保存する(最初の区間はまだ窓が無いのでpending時のみ)。
             if (sec == 0 && Measurement_IsPending())
             {
@@ -395,17 +424,20 @@ void executeSecondlyTask(void)
                 {
                     // 1レコード目の時刻基準を「最初の保存(=区間終端)の今」で確定する。
                     // 以降の各レコード時刻は start_dt + index*interval で復元される。
-                    EM_settings.start_dt = g_epoch;
+                    EM_settings.start_dt = Clock_Get();
                     EM_saveSettings();
                     start_dt_set = true;
                 }
                 Measurement_AvgStore();
+                // 次の窓まで間があれば CO2 センサを sleep にする (idle 55uA → 1uA)。暖機中は眠らせない
+                if (!warming && win_start > 0) Measurement_SensorSleep();
             }
 
             // 窓の開始/中間: 連続 single-shot で CO2 を積算する。
             if (sec == win_start)      Measurement_AvgBegin();  // 窓開始(リセット+トリガ)
             else if (sec > win_start)  Measurement_AvgSample();  // 窓中間(読み+積算, 次トリガ)
-            // sec < win_start はスリープのみ(計測しない=省電力)
+            else if (warming)          Measurement_WarmupShot(); // 窓の外: 暖機のための計測 (結果は捨てる)
+            // それ以外の sec < win_start はスリープのみ(計測しない=省電力)
 
             if (++sec >= N) sec = 0;
         }
@@ -438,6 +470,8 @@ void setLoggingActive(bool on)
             conditioning_wait = MEASUREMENT_CONDITIONING_SEC;
         else
             conditioning_wait = 0; // 送信失敗時は従来どおり即計測へ(コンディショニング省略)
+        // CO2あり版は、記録間隔によらず最初の1時間は毎秒計測してセンサを暖機する
+        co2_warmup_left = Measurement_HasCO2() ? CO2_WARMUP_SEC : 0;
         // start_dt(各レコードの時刻復元の基準)は、コンディショニング後の初回計測時に確定する。
         // (executeSecondlyTask で start_dt_set を見て EEPROM 保存する)
         start_dt_set = false;
@@ -453,8 +487,18 @@ bool getLoggingActive(void)
 }
 
 // ソフトウェア時計 (UNIX epoch秒) の設定/取得。set_time / get_status から使う。
-void Clock_Set(uint32_t epoch) { g_epoch = epoch; }
-uint32_t Clock_Get(void)       { return g_epoch; }
+// 割り込みの中で進めるので、4バイトの読み書きは割り込みを止めて行う。
+void Clock_Set(uint32_t epoch)
+{
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { g_epoch = epoch; }
+}
+
+uint32_t Clock_Get(void)
+{
+    uint32_t e;
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { e = g_epoch; }
+    return e;
+}
 
 // 時計の補正 [ppm] (正=水晶が速いので遅らせる)。RTC の水晶誤差補正 (CALIB/CORREN) を使う。
 // 100万クロックごとに |ppm| クロックを足し引きし、PIT(1秒)にも効く。
@@ -524,20 +568,38 @@ uint32_t Device_GetID(void)
     return hash;
 }
 
-// エラー表示 (電池不足): 緑LEDを3秒ごとに1回点滅し続ける (停止状態)。
+// エラー表示 (電池不足): LEDを3秒ごとに1回点滅し続ける (停止状態)。
+// 点滅の合間は STANDBY で眠り、PIT(1秒)で起きる。眠らずに回り続けると数mA流れ続け、
+// 弱った電池をさらに深く放電させてしまう (液漏れの原因になる)。
 void showError(short int errNum)
 {
     (void)errNum;
     watchdogSet(0);
+
+    // 省電力の設定: USB・ADC を止め、フラッシュを Power-down にする
+    s_usb_running = false;
+    USB_Comm_Disable();
+    ADC0.CTRLA &= ~ADC_ENABLE_bm;
+    W25_PowerDown();
+    Measurement_SensorPowerDown();
+
+    // PIT(1秒)で STANDBY から起きられるようにする (起動時の電池確認から呼ばれたときは未設定)
+    while (RTC.STATUS > 0) ;
+    RTC.CTRLA |= RTC_RUNSTDBY_bm;
+    RTC.PITINTCTRL = RTC_PI_bm;
+    sei();
+
     while(true)
     {
         blinkGreenLED(1);
         // 待つ間に USB が接続されたら(UDTC=High)リセットして USB通信モードで起動し直す。
         // USB給電なら電池を見ないので、電池不足でも PC から状態確認やデータ回収ができる。
-        for (uint8_t i = 0; i < 30; i++)
+        // (UDTC の立ち上がりでも起きるので、接続にはすぐ反応する)
+        for (uint8_t i = 0; i < 3; i++)
         {
             if (UDTC_GetValue()) _PROTECTED_WRITE(RSTCTRL.SWRR, RSTCTRL_SWRST_bm);
-            DELAY_milliseconds(100);
+            set_sleep_mode(SLEEP_MODE_STANDBY);
+            sleep_mode();
         }
     }
 }

@@ -27,6 +27,7 @@
 #define CMD_WRITE_ENABLE      0x06
 #define CMD_READ_STATUS_REG1  0x05
 #define CMD_SECTOR_ERASE      0x20   // 4KB Sector Erase (3-byte address)
+#define CMD_BLOCK_ERASE       0xD8   // 64KB Block Erase (3-byte address)
 #define CMD_PAGE_PROGRAM      0x02   // Page Program     (3-byte address)
 #define CMD_READ_DATA         0x03   // Read Data        (3-byte address)
 #define CMD_CHIP_ERASE        0xC7
@@ -36,6 +37,13 @@
 // ==========================================
 // 内部ヘルパー関数 (static)
 // ==========================================
+
+// 書き込み・消去の完了待ちの間に呼ぶ関数 (無ければ NULL)
+static void (*s_busy_hook)(void) = NULL;
+
+void W25_SetBusyHook(void (*hook)(void)) {
+    s_busy_hook = hook;
+}
 
 // アドレスチェック用ヘルパー関数
 static bool isValidRange(uint32_t addr, uint32_t len) {
@@ -63,7 +71,10 @@ static bool W25_WaitForReady(void) {
         SPI0_ByteExchange(CMD_READ_STATUS_REG1);
         status = SPI0_ByteExchange(0x00); // ダミーを送ってステータスを読む
         SPI_CS_SetHigh();
-        
+
+        // 待っている間の処理 (USB のポーリングなど)。消去は1回で最大2秒かかる
+        if (s_busy_hook != NULL) s_busy_hook();
+
         // タイムアウト判定
         if (timeout-- == 0)  return false; // エラー発生
     } while (status & 0x01); // Bit0 (BUSY) が1の間待つ
@@ -173,6 +184,20 @@ void W25_SectorErase(uint32_t address) {
 
     SPI_CS_SetLow();
     SPI0_ByteExchange(CMD_SECTOR_ERASE);
+    SPI0_ByteExchange((address >> 16) & 0xFF);
+    SPI0_ByteExchange((address >> 8)  & 0xFF);
+    SPI0_ByteExchange(address         & 0xFF);
+    SPI_CS_SetHigh();
+
+    W25_WaitForReady();
+}
+
+// 64KBブロック消去 (3バイトアドレス指定)。typ 150ms、最大 2秒
+void W25_BlockErase(uint32_t address) {
+    W25_WriteEnable();
+
+    SPI_CS_SetLow();
+    SPI0_ByteExchange(CMD_BLOCK_ERASE);
     SPI0_ByteExchange((address >> 16) & 0xFF);
     SPI0_ByteExchange((address >> 8)  & 0xFF);
     SPI0_ByteExchange(address         & 0xFF);

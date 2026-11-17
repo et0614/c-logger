@@ -28,6 +28,9 @@ static bool s_has_co2 = true;
 // 初期化してから成功した CO2 の single-shot 計測の回数 (FRC の前提条件の確認用。上限で止める)
 static uint8_t s_co2_shots = 0;
 
+// STCC4 を sleep にしているか (次のトリガの前に起こす)
+static bool s_sensor_sleeping = false;
+
 // <editor-fold defaultstate="collapsed" desc="SHT4x (CO2なし版で直接読む温湿度センサ)">
 
 #define SHT4X_ADDRESS     0x44  // SHT40-AD1B
@@ -66,9 +69,50 @@ static bool SHT4X_read(float *temperature, float *humidity)
 
 // 計測トリガ/読み出しを、CO2あり版(STCC4)とCO2なし版(SHT4x直結)で振り分ける。
 // CO2なし版の co2 は CO2_NONE を返す。
+static bool sensorRead(uint16_t *co2, float *temperature, float *humidity);
+
 static bool sensorTrigger(void)
 {
-    return s_has_co2 ? STCC4_measureSingleShot() : SHT4X_trigger();
+    if (!s_has_co2) return SHT4X_trigger();
+    if (s_sensor_sleeping)
+    {
+        STCC4_exitSleep(); // 5ms 待って idle に戻る
+        s_sensor_sleeping = false;
+    }
+    return STCC4_measureSingleShot();
+}
+
+void Measurement_SensorSleep(void)
+{
+    // 計測の合間は STCC4 を sleep にする (idle 55uA → sleep 1uA。datasheet 3.4.6 の推奨手順)。
+    // 補償値や自動校正 (ASC) の状態は sleep 中も保たれる。次のトリガで自動的に起こす。
+    if (!s_has_co2 || s_sensor_sleeping) return;
+    if (STCC4_enterSleep()) s_sensor_sleeping = true;
+}
+
+void Measurement_SensorPowerDown(void)
+{
+    // 待機に入る前に呼ぶ。STCC4 は電源投入後 idle (55uA) で待つので、CO2あり/なしの判定前でも
+    // sleep 命令を送っておく (CO2なし版は応答が無いだけ)。
+    (void)STCC4_enterSleep();
+    s_sensor_sleeping = true;
+    s_sensor_inited = false; // 次に使うときは起こして初期化し直す
+}
+
+// トリガ済みの計測結果を読み捨てる
+static void discardPending(void)
+{
+    if (!s_pending) return;
+    s_pending = false;
+    uint16_t co2;
+    float t, h;
+    (void)sensorRead(&co2, &t, &h);
+}
+
+void Measurement_WarmupShot(void)
+{
+    discardPending();
+    Measurement_Trigger();
 }
 
 static bool sensorRead(uint16_t *co2, float *temperature, float *humidity)
@@ -81,6 +125,10 @@ static bool sensorRead(uint16_t *co2, float *temperature, float *humidity)
 // STCC4 をソフトリセットし、応答の有無で CO2あり/なし を判定する。
 static void initSensor(void)
 {
+    // sleep 中の STCC4 はソフトリセットにも応答しないので、先に起こす
+    // (起こさないと、前回の記録で sleep にしたままのセンサを「CO2なし」と誤判定する)
+    STCC4_exitSleep();
+    s_sensor_sleeping = false;
     // STCC4 ソフトリセット (general call) で既知の状態にする
     STCC4_initialize();
     DELAY_milliseconds(10);
@@ -223,16 +271,30 @@ bool Measurement_IsPending(void)
 
 void Measurement_ClearData(void)
 {
-    // 既存データの件数を調べ、使用済みセクタ(4KB単位)を消去する。
-    // (全チップ消去は数十秒かかるため、使用分だけ消す)
+    // 既存データの件数を調べ、使用済みの領域だけを消去する。
+    //  ・末尾から先頭へ消す。件数は「先頭から連続した有効レコード」を二分探索で数えるので
+    //    (W25_Count_Record)、先頭から消すと、途中で電源が落ちた後に少し記録したとき、消し残した
+    //    古いデータを有効と数えてしまう。末尾から消せば、残るのは常に先頭から連続したデータになる。
+    //  ・64KB ブロックがまるごと使用済みならブロック消去 (typ 150ms)、端数は 4KB セクタ消去 (typ 45ms)。
+    //    満杯 (約4000セクタ) でもセクタ消去だけの約3分が約40秒になる。
     uint32_t n = W25_Count_Record();
     if (n > 0)
     {
-        uint32_t lastAddr = W25_GetAddressFromRecordIndex(n - 1);
-        for (uint32_t addr = DATA_START_ADDR; addr <= lastAddr; addr += 4096)
+        const int32_t first = DATA_START_ADDR / 4096;                              // データ領域の先頭セクタ
+        int32_t s = (int32_t)(W25_GetAddressFromRecordIndex(n - 1) / 4096);        // 使用済みの末尾セクタ
+        while (s >= first)
         {
-            wdt_reset(); // 消去は長くかかる (データが多いと数分)。USB通信モードのウォッチドッグを払う
-            W25_SectorErase(addr);
+            wdt_reset(); // USB通信モードのウォッチドッグを払う
+            if ((s & 0x0F) == 0x0F && s - 15 >= first)
+            {
+                W25_BlockErase((uint32_t)(s - 15) << 12); // ブロックの末尾セクタに居て、ブロック全体がデータ領域
+                s -= 16;
+            }
+            else
+            {
+                W25_SectorErase((uint32_t)s << 12);
+                s -= 1;
+            }
         }
     }
     rec_latest = 0;
@@ -297,6 +359,7 @@ static void avgReadPending(void)
 
 void Measurement_AvgBegin(void)
 {
+    discardPending();      // 暖機中の計測結果が残っていれば読み捨てる (窓の平均に入れない)
     s_co2_sum = 0;
     s_co2_cnt = 0;
     Measurement_Trigger(); // 最初の single-shot をトリガ (s_pending=true)

@@ -52,8 +52,13 @@ typedef struct {
     int8_t   usb_err;     // USB スタックが最後に止まったときのエラーコード (RETURN_CODE_t。無ければ 0)
     uint8_t  usb_errs;    // USB スタックが止まって作り直した回数
     uint8_t  wdt_resets;  // ウォッチドッグでリセットした回数
+    uint8_t  checks;      // 抜けの確認 (detach して UDTC を読む) をした回数
+    uint16_t bus_resets;  // USB のバスリセットの回数
+    uint16_t suspends;    // USB の Suspend の回数
+    uint16_t resumes;     // USB の Resume の回数
+    uint16_t class_reqs;  // ホストからのクラス要求 (ポートを開く・閉じるときに来る) の回数
 } Diag_t;
-const Diag_t *Diag_Get(void);
+Diag_t *Diag_Get(void);
 
 #ifdef	__cplusplus
 }

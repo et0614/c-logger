@@ -23,6 +23,9 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
+/// USB のシリアル番号を機体ID (8桁の16進) にする。USBDevice_Initialize で attach する前に1回呼ぶ。
+void USB_Comm_SetSerial(uint32_t id);
+
 /// CDC 仮想シリアルポートを初期化する (SYSTEM_Initialize の後に1回呼ぶ)
 void USB_Comm_Initialize(void);
 

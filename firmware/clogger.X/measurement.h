@@ -46,6 +46,21 @@ bool Measurement_StartConditioning(void);
 /// 温湿度は平均化せず、窓内の最後の有効サンプル値を用いる。将来変更する可能性があるため定数で持つ。
 #define CO2_AVG_WINDOW_SEC  5
 
+/// CO2 センサの暖機 [秒] (CO2あり版のみ)。記録開始からこの間は、記録間隔によらず毎秒計測を続ける。
+/// STCC4 は 3時間以上止めた後、精度が出るまでに連続計測で最大1時間 (または single shot 360回) かかる
+/// (datasheet 1.1.3 Warm-Up)。窓の5回だけだと、記録間隔1分で72分、10分で12時間かかってしまう。
+/// 暖機中も記録は通常どおり (各区間の末尾の窓の平均) で、窓の外の計測結果は読み捨てる。
+#define CO2_WARMUP_SEC  3600
+
+/// 暖機中の1回分: 前回の結果を読み捨て、次の single-shot をトリガする (毎秒呼ぶ)。
+void Measurement_WarmupShot(void);
+
+/// CO2 センサを sleep にする (idle 55uA → 1uA)。次のトリガで自動的に起こす。CO2なし版では何もしない。
+void Measurement_SensorSleep(void);
+
+/// 待機に入る前に CO2 センサを sleep にする (CO2あり/なしの判定前でも呼べる)。
+void Measurement_SensorPowerDown(void);
+
 /// CO2センサ(STCC4)を工場出荷状態にリセットする (センサ内部の校正値等が初期化される)。
 /// ソフトリセットで idle にしてから実行する。約100msブロックする。
 /// 注意: これはセンサのリセットであり、ロガーのFlashデータ/EEPROM設定は消さない。
@@ -125,9 +140,10 @@ void Measurement_AvgSample(void);
 /// @return true:保存成功, false:Flash満杯 or 書込み失敗
 bool Measurement_AvgStore(void);
 
-/// 保存済みデータを消去する (メモリ初期化)。使用済みセクタ(4KB単位)を物理消去し、
+/// 保存済みデータを消去する (メモリ初期化)。使用済みの領域を物理消去し、
 /// rec_latest を 0 に戻す。空き判定(humidity==0xFFFF)が正しく働くよう物理消去する。
-/// 注意: 消去はブロッキング(セクタあたり約45ms)。データ量が多いと時間がかかる。
+/// 末尾から先頭へ消す (途中で電源が落ちても、残るのは先頭から連続した有効なデータになる)。
+/// 注意: 消去はブロッキング (64KB ブロックあたり typ 150ms。満杯で typ 約40秒)。
 void Measurement_ClearData(void);
 
 #ifdef __cplusplus

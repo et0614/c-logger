@@ -259,6 +259,37 @@ static void ph_clear_memory(int32_t id, const char *json,
     reply_ok(id);
 }
 
+// 試験用: ダミーのレコードを保存データの末尾に書き足す (大量のデータでの読み出し・消去の試験用)。
+//   params: { "count": 書き足す件数, "seed": 値をずらす数 (省略時 0) }
+//   i 件目 (書き足す前の件数を 0 件目とする通し番号) の値:
+//     temperature = (i + seed) % 5000、humidity = (i * 7 + seed) % 10001、co2 = 400 + (i + seed) % 2000
+//   応答: {"id":N,"ok":true,"start":書き足す前の件数,"count":書いた件数}
+// 1件ずつ書くので1万件で十数秒かかる。待ちの間も USB のポーリングは続く (W25_SetBusyHook)。
+static void ph_debug_fill(int32_t id, const char *json,
+                          const jsmntok_t *t, int ntok, int params)
+{
+    int ct = (params >= 0) ? obj_get(json, t, ntok, params, "count") : -1;
+    int st = (params >= 0) ? obj_get(json, t, ntok, params, "seed") : -1;
+    if (ct < 0) { reply_error(id, "missing_count"); return; }
+    int32_t count = tok_int(json, &t[ct]);
+    uint32_t seed = (st >= 0) ? (uint32_t)tok_int(json, &t[st]) : 0;
+    uint32_t start = W25_Count_Record();
+    if (count <= 0 || (uint32_t)count > MAX_RECORD_COUNT - start) { reply_error(id, "invalid_count"); return; }
+
+    for (uint32_t i = start; i < start + (uint32_t)count; i++)
+    {
+        SensorData_t rec;
+        rec.temperature = (int16_t)((i + seed) % 5000);
+        rec.humidity    = (uint16_t)((i * 7 + seed) % 10001);
+        rec.co2_ppm     = (uint16_t)(400 + (i + seed) % 2000);
+        if (!W25_WriteRecord(i, &rec)) { reply_error(id, "write_failed"); return; }
+    }
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"start\":%lu,\"count\":%ld}\n",
+             (long)id, (unsigned long)start, (long)count);
+    send_line(b);
+}
+
 // 工場出荷リセット (保守用): CO2センサ(STCC4)を工場出荷状態に戻す。
 // 一般ユーザーは使わない。ロガーのFlashデータ/設定は消さず、センサ内部のみ初期化する。
 // 約100msブロックしてからセンサの応答可否で ok/error を返す。
@@ -298,11 +329,17 @@ static void ph_get_diag(int32_t id, const char *json,
                         const jsmntok_t *t, int ntok, int params)
 {
     (void)json; (void)t; (void)ntok; (void)params;
+    //   chk      : 抜けの確認 (detach して UDTC を読む) をした回数
+    //   bus_rst / sus / res : USB のバスリセット / Suspend / Resume の回数
+    //   cls      : ホストからのクラス要求 (ポートを開く・閉じるときに来る) の回数
     const Diag_t *d = Diag_Get();
-    char b[JP_REPLY_CAP];
+    char b[192];
     snprintf(b, sizeof(b),
-        "{\"id\":%ld,\"ok\":true,\"rst\":%u,\"usb_err\":%d,\"usb_errs\":%u,\"wdt\":%u}\n",
-        (long)id, (unsigned)d->rstfr, (int)d->usb_err, (unsigned)d->usb_errs, (unsigned)d->wdt_resets);
+        "{\"id\":%ld,\"ok\":true,\"rst\":%u,\"usb_err\":%d,\"usb_errs\":%u,\"wdt\":%u,"
+        "\"chk\":%u,\"bus_rst\":%u,\"sus\":%u,\"res\":%u,\"cls\":%u}\n",
+        (long)id, (unsigned)d->rstfr, (int)d->usb_err, (unsigned)d->usb_errs, (unsigned)d->wdt_resets,
+        (unsigned)d->checks, (unsigned)d->bus_resets, (unsigned)d->suspends, (unsigned)d->resumes,
+        (unsigned)d->class_reqs);
     send_line(b);
 }
 
@@ -638,6 +675,7 @@ static const jp_command_t s_commands[] = {
     { "factory_reset", ph_factory_reset },
     { "get_status",    ph_get_status    },
     { "get_diag",      ph_get_diag      },
+    { "debug_fill",    ph_debug_fill    },
     { "measure",      ph_measure       },
     { "selftest",      ph_selftest      },
     { "dump",          ph_dump          },
