@@ -1,8 +1,8 @@
-# C-Logger 基板 製造データ（JLCPCB入稿用）
+# C-Logger 基板 3.1 製造データ（JLCPCB入稿用）
 
 基板バージョン: **3.1**（シルク表記「Version 3.1」）
 
-リポジトリには最新版のみを置く。以前の版は Git の履歴（タグ）で参照する。基板を修正して再発注するときは 3.1, 3.2 … と上げ、シルク表記と下記を更新する。
+3.2（温湿度＋加速度、CO2 なし）を作ったので、3.1 は **CO2あり版を作るための基板**として残している。版ごとの違いは `hardware/README.md`。
 
 | ファイル | 内容 |
 |---|---|
@@ -12,7 +12,7 @@
 
 - BOM の列: Comment / Designator / Footprint / JLCPCB Part #。CPL の列: Designator / Mid X / Mid Y / Layer / Rotation
 - BOM・CPL は Fusion の部品配置出力（CAM の Assembly: `PnP_C-Logger_front.txt` / `back.txt`）と `hardware/BOM.xlsx`（部品番号）から作成。UPDIテストパッドは実装部品ではないため除外。参照記号とパッケージは配置出力と全数一致を確認済み
-- 設計データ: `hardware/pcb/clogger.f3z`、回路図: `hardware/pcb/clogger_schematic.pdf`、外観: `docs/images/`、ケース（蓋）: `hardware/enclosure/case.stp`
+- 設計データ: `hardware/v3.1/pcb/clogger.f3z`、回路図: `hardware/v3.1/pcb/clogger_schematic.pdf`、外観: `docs/images/`、ケース（蓋）: `hardware/enclosure/case.stp`
 
 ## CO2あり版・なし版
 同じ基板で、実装する部品だけを変える。

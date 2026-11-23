@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE eagle SYSTEM "eagle.dtd">
+<eagle version="9.6.2">
+<drawing>
+<settings>
+<setting alwaysvectorfont="no"/>
+<setting verticaltext="up"/>
+</settings>
+<grid distance="0.05" unitdist="mm" unit="mm" style="lines" multiple="1" display="no" altdistance="0.01" altunitdist="mm" altunit="mm"/>
+<layers>
+<layer number="1" name="Top" color="4" fill="1" visible="yes" active="yes"/>
+<layer number="16" name="Bottom" color="1" fill="1" visible="yes" active="yes"/>
+<layer number="17" name="Pads" color="2" fill="1" visible="yes" active="yes"/>
+<layer number="18" name="Vias" color="2" fill="1" visible="yes" active="yes"/>
+<layer number="19" name="Unrouted" color="6" fill="1" visible="yes" active="yes"/>
+<layer number="20" name="Dimension" color="15" fill="1" visible="yes" active="yes"/>
+<layer number="21" name="tPlace" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="22" name="bPlace" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="23" name="tOrigins" color="15" fill="1" visible="yes" active="yes"/>
+<layer number="24" name="bOrigins" color="15" fill="1" visible="yes" active="yes"/>
+<layer number="25" name="tNames" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="26" name="bNames" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="27" name="tValues" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="28" name="bValues" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="29" name="tStop" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="30" name="bStop" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="31" name="tCream" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="32" name="bCream" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="35" name="tGlue" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="36" name="bGlue" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="39" name="tKeepout" color="4" fill="1" visible="yes" active="yes"/>
+<layer number="40" name="bKeepout" color="1" fill="1" visible="yes" active="yes"/>
+<layer number="41" name="tRestrict" color="4" fill="1" visible="yes" active="yes"/>
+<layer number="42" name="bRestrict" color="1" fill="1" visible="yes" active="yes"/>
+<layer number="43" name="vRestrict" color="2" fill="1" visible="yes" active="yes"/>
+<layer number="44" name="Drills" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="45" name="Holes" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="46" name="Milling" color="3" fill="1" visible="yes" active="yes"/>
+<layer number="47" name="Measures" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="48" name="Document" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="49" name="Reference" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="51" name="tDocu" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="52" name="bDocu" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="91" name="Nets" color="2" fill="1" visible="yes" active="yes"/>
+<layer number="92" name="Busses" color="1" fill="1" visible="yes" active="yes"/>
+<layer number="93" name="Pins" color="2" fill="1" visible="yes" active="yes"/>
+<layer number="94" name="Symbols" color="4" fill="1" visible="yes" active="yes"/>
+<layer number="95" name="Names" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="96" name="Values" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="97" name="Info" color="7" fill="1" visible="yes" active="yes"/>
+<layer number="98" name="Guide" color="6" fill="1" visible="yes" active="yes"/>
+</layers>
+<library>
+<description>C-Logger 用。Silan SC7A20H (SC7A20HTR): 3軸加速度計、LGA-12 2×2×1.0 mm、I2C/SPI。フットプリントは士蘭微電子のデータシート (説明書 版本 0.7) の封装外形図と管脚排列図 (仰視図) による。ST の LIS2DH12 とはピン配置が違うので載せ替えられない (LIS2DH12 は 1番 SCL、7番 GND、9番 VDD。SC7A20H は 1番 SDO、7番 VDD)。</description>
+<packages>
+<package name="LGA-12_2X2X1.0_SC7A20H">
+<description>LGA-12 2×2×1.0 mm (SC7A20H)。部品面から見た図で、1番は左上。原点は本体の中心。
+端子 (データシート): 0.325 × 0.25 mm (b × b1)、ピッチ 0.5 mm、左右の列の中心間 1.58 mm (E1)、上下の行の中心間 1.50 mm (D1)。四隅と左右の端子は横長、上下の内側の端子 (5・6・11・12番) は縦長。
+ランドは端子より外向きに 0.1 mm 延ばした (手はんだやホットエアで載せ替えるとき、はんだが見えるように)。内向きは端子と同じ。</description>
+<smd name="1" x="-0.84" y="0.75" dx="0.425" dy="0.25" layer="1" roundness="0"/>
+<smd name="2" x="-0.84" y="0.25" dx="0.425" dy="0.25" layer="1" roundness="0"/>
+<smd name="3" x="-0.84" y="-0.25" dx="0.425" dy="0.25" layer="1" roundness="0"/>
+<smd name="4" x="-0.84" y="-0.75" dx="0.425" dy="0.25" layer="1" roundness="0"/>
+<smd name="5" x="-0.25" y="-0.8" dx="0.25" dy="0.425" layer="1" roundness="0"/>
+<smd name="6" x="0.25" y="-0.8" dx="0.25" dy="0.425" layer="1" roundness="0"/>
+<smd name="7" x="0.84" y="-0.75" dx="0.425" dy="0.25" layer="1" roundness="0"/>
+<smd name="8" x="0.84" y="-0.25" dx="0.425" dy="0.25" layer="1" roundness="0"/>
+<smd name="9" x="0.84" y="0.25" dx="0.425" dy="0.25" layer="1" roundness="0"/>
+<smd name="10" x="0.84" y="0.75" dx="0.425" dy="0.25" layer="1" roundness="0"/>
+<smd name="11" x="0.25" y="0.8" dx="0.25" dy="0.425" layer="1" roundness="0"/>
+<smd name="12" x="-0.25" y="0.8" dx="0.25" dy="0.425" layer="1" roundness="0"/>
+<wire x1="-1" y1="1" x2="1" y2="1" width="0.05" layer="51"/>
+<wire x1="1" y1="1" x2="1" y2="-1" width="0.05" layer="51"/>
+<wire x1="1" y1="-1" x2="-1" y2="-1" width="0.05" layer="51"/>
+<wire x1="-1" y1="-1" x2="-1" y2="1" width="0.05" layer="51"/>
+<circle x="-0.65" y="0.35" radius="0.08" width="0.05" layer="51"/>
+<wire x1="-0.45" y1="1.15" x2="0.45" y2="1.15" width="0.1" layer="21"/>
+<wire x1="-0.45" y1="-1.15" x2="0.45" y2="-1.15" width="0.1" layer="21"/>
+<circle x="-1.3" y="1.05" radius="0.075" width="0.15" layer="21"/>
+<wire x1="-1.3" y1="1.3" x2="1.3" y2="1.3" width="0.05" layer="39"/>
+<wire x1="1.3" y1="1.3" x2="1.3" y2="-1.3" width="0.05" layer="39"/>
+<wire x1="1.3" y1="-1.3" x2="-1.3" y2="-1.3" width="0.05" layer="39"/>
+<wire x1="-1.3" y1="-1.3" x2="-1.3" y2="1.3" width="0.05" layer="39"/>
+<text x="-1.3" y="1.5" size="0.6" layer="25">&gt;NAME</text>
+<text x="-1.3" y="-2.1" size="0.6" layer="27">&gt;VALUE</text>
+</package>
+</packages>
+<symbols>
+<symbol name="SC7A20H">
+<pin name="VDD" x="-15.24" y="7.62" length="middle" direction="pwr"/>
+<pin name="VDDIO" x="-15.24" y="5.08" length="middle" direction="pwr"/>
+<pin name="CS" x="-15.24" y="0" length="middle" direction="in"/>
+<pin name="SDO" x="-15.24" y="-2.54" length="middle" direction="io"/>
+<pin name="SCL" x="15.24" y="7.62" length="middle" direction="in" rot="R180"/>
+<pin name="SDA" x="15.24" y="5.08" length="middle" direction="io" rot="R180"/>
+<pin name="INT1" x="15.24" y="0" length="middle" direction="out" rot="R180"/>
+<pin name="INT2" x="15.24" y="-2.54" length="middle" direction="out" rot="R180"/>
+<pin name="NC" x="15.24" y="-7.62" length="middle" direction="nc" rot="R180"/>
+<pin name="GND" x="-2.54" y="-15.24" length="middle" direction="pwr" rot="R90"/>
+<pin name="GNDIO" x="0" y="-15.24" length="middle" direction="pwr" rot="R90"/>
+<pin name="RES" x="2.54" y="-15.24" length="middle" direction="pas" rot="R90"/>
+<wire x1="-10.16" y1="10.16" x2="10.16" y2="10.16" width="0.254" layer="94"/>
+<wire x1="10.16" y1="10.16" x2="10.16" y2="-10.16" width="0.254" layer="94"/>
+<wire x1="10.16" y1="-10.16" x2="-10.16" y2="-10.16" width="0.254" layer="94"/>
+<wire x1="-10.16" y1="-10.16" x2="-10.16" y2="10.16" width="0.254" layer="94"/>
+<text x="-10.16" y="11.43" size="1.778" layer="95">&gt;NAME</text>
+<text x="-10.16" y="-20.32" size="1.778" layer="96">&gt;VALUE</text>
+</symbol>
+</symbols>
+<devicesets>
+<deviceset name="SC7A20H" prefix="U">
+<description>Silan SC7A20H 3軸加速度計 (±2/4/8/16 g、12 bit、1.71〜3.6 V)。
+I2C で使うとき: CS (10番) は内部で VDDIO にプルアップされているので未接続でよい。SDO (1番) は未接続か High でアドレス 0x19、Low で 0x18 (Low にすると内部プルアップに電流が流れるので、未接続を勧める)。RES は SC7A20H のデータシートの 4番 NC で、GND につなぐ (I2C/SPI のどちらでも GND)。11番 NC は未接続。
+VDD と VDDIO にそれぞれ 100 nF。I2C のプルアップはデータシートの推奨 4.7 kΩ。INT1・INT2 は既定でプッシュプル、割り込みで High。
+WHO_AM_I (0x0F) = 0x11。</description>
+<gates>
+<gate name="G$1" symbol="SC7A20H" x="0" y="0"/>
+</gates>
+<devices>
+<device name="" package="LGA-12_2X2X1.0_SC7A20H">
+<connects>
+<connect gate="G$1" pin="SDO" pad="1"/>
+<connect gate="G$1" pin="SDA" pad="2"/>
+<connect gate="G$1" pin="VDDIO" pad="3"/>
+<connect gate="G$1" pin="RES" pad="4"/>
+<connect gate="G$1" pin="INT1" pad="5"/>
+<connect gate="G$1" pin="INT2" pad="6"/>
+<connect gate="G$1" pin="VDD" pad="7"/>
+<connect gate="G$1" pin="GNDIO" pad="8"/>
+<connect gate="G$1" pin="GND" pad="9"/>
+<connect gate="G$1" pin="CS" pad="10"/>
+<connect gate="G$1" pin="NC" pad="11"/>
+<connect gate="G$1" pin="SCL" pad="12"/>
+</connects>
+<technologies>
+<technology name="">
+<attribute name="MPN" value="SC7A20HTR"/>
+<attribute name="MANUFACTURER" value="Silan"/>
+</technology>
+</technologies>
+</device>
+</devices>
+</deviceset>
+</devicesets>
+</library>
+</drawing>
+</eagle>

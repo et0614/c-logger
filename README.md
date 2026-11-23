@@ -26,10 +26,11 @@ docs/
   _config.yml           GitHub Pages (Jekyll) の設定
   images/               基板の外観 (3d_top/3d_bottom) とレイアウト (pcb_top/pcb_bottom)
 hardware/
+  README.md             版の一覧（3.2 = 温湿度＋加速度、3.1 = CO2あり版）
   BOM.xlsx              設計用部品表（JLCPCB 部品番号・CO2あり/なしの別）
   datasheet/            主要部品のデータシート（ファイル名=参照記号）
-  pcb/                  Fusion 設計データ (clogger.f3z)、回路図 PDF
-  fab/                  JLCPCB 入稿データ（ガーバー、BOM・CPL を CO2あり/なし版それぞれ）
+  lib/                  自作の部品ライブラリ（SC7A20H）
+  v3.2/, v3.1/          版ごとの Fusion 設計データ・回路図 (pcb/) と JLCPCB 入稿データ (fab/)
   enclosure/            ケース（上蓋）: case.3dm (Rhino)、case.stp (発注用)
 firmware/clogger.X/     MPLAB X プロジェクト（AVR64DU32, MCC Melody: clogger.mc3）
 firmware/bootloader/    USB ブートローダ（euboot）。USB でのファームウェア更新と、量産用の1ファイル化 (build_production_hex.py)
@@ -39,7 +40,7 @@ software/               PCツール: clogger_gui.py (GUI)、clogger.py (コマ�
 
 ## バージョン
 
-- 基板: 3.1（シルク表記「Version 3.1」）。修正ごとに 3.1, 3.2 … と上げる。履歴は `hardware/fab/README.md`
+- 基板: 3.2（温湿度＋加速度。シルク表記「Version 3.2」）と 3.1（CO2あり版）。版ごとの違いは `hardware/README.md`、履歴は `hardware/v3.1/fab/README.md` と `hardware/v3.2/fab/README.md`
 - ファームウェア: 3.5.0（`hello` 応答の `fw`。`firmware/clogger.X/version.h`）
 
 ## 配布 (GitHub Releases)

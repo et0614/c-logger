@@ -1,6 +1,6 @@
 # データシート
 
-ファイル名は基板の参照記号（`hardware/pcb/clogger_schematic.pdf`）に合わせている。抵抗・コンデンサ・集合抵抗は省略。
+ファイル名は基板の参照記号（`hardware/v3.1/pcb/clogger_schematic.pdf`。3.2 で足した U8 は `hardware/v3.2/pcb/clogger_v3.2_schematic.pdf`）に合わせている。抵抗・コンデンサ・集合抵抗は省略。
 
 | ファイル | 部品 | 型番 | LCSC |
 |---|---|---|---|
@@ -11,6 +11,7 @@
 | `U5.pdf` | USB用 LDO 3.3V | XC6206P332MR-G (Torex) | C5446 |
 | `U6.pdf` | 昇圧 DC/DC 3.3V | TPS61021A (TI) | C193037 |
 | `U7.pdf` | CO2センサ (CO2あり版のみ) | STCC4 (Sensirion) | C49191471 |
+| `U8.pdf` | 3軸加速度計 (基板3.2) | SC7A20HTR (Silan) | C19274408 |
 | `Q1.pdf` | 電池切り離し Pch MOSFET | AO3415A (AOS) | C133233 |
 | `D1.pdf` | ショットキーダイオード | B5819W SL (JSCJ) | C8598 |
 | `D2.pdf` | LED 赤 0603 | KT-0603R (Hubei KENTO) | C2286 |
