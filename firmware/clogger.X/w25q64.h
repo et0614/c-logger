@@ -33,7 +33,11 @@ extern "C" {
 #define DATA_START_ADDR  4096 // データ領域の開始位置 (最初の4KBは管理領域として飛ばす)
 #define PAGE_SIZE        256  // Flashのページサイズ
 #define FLASH_TOTAL_SIZE 0x1000000 // 16MB (W25Q128 の総容量 (Byte))
-#define DATA_AREA_SIZE   (FLASH_TOTAL_SIZE - DATA_START_ADDR) // データ領域の総容量 = 総容量 - 予約領域(4KB)
+// 先頭の4KBセクタ: 記録の区切りの表 (measurement.c。記録を再開するたびに1件足す)
+#define SEGMENT_TABLE_ADDR 0
+// 末尾の4KBセクタ: セルフテストの書き込み試験に使う (FW 3.5.0 で先頭から移した。先頭は区切りの表に使う)
+#define SELFTEST_ADDR    (FLASH_TOTAL_SIZE - 4096)
+#define DATA_AREA_SIZE   (FLASH_TOTAL_SIZE - DATA_START_ADDR - 4096) // データ領域 = 総容量 - 先頭と末尾の4KB
 #define MAX_RECORD_COUNT ((DATA_AREA_SIZE / PAGE_SIZE) * RECS_PER_PAGE) // 保存可能な最大レコード数 (≒ 2.75M)
 
 // データ構造体の定義 (6 bytes, packed)
@@ -102,6 +106,12 @@ void W25_ChipErase(void);
 bool W25_ReadData(uint32_t address, uint8_t *buffer, uint16_t len);
 
 /**
+ * @brief 消去済みの領域に任意のバイト列を書き込む (Page Program)。1ページ (256バイト) をまたがないこと。
+ * @return true:成功, false:範囲外・タイムアウト
+ */
+bool W25_WriteData(uint32_t address, uint8_t *data, uint16_t len);
+
+/**
  * @brief レコード番号(index)を指定してデータを書き込む。
  * 内部で必要に応じてセクタ消去も実行する。
  * @param recordIndex 0から始まる通し番号
@@ -135,8 +145,8 @@ bool W25_ReadOnePage(uint32_t pageIndex, uint8_t *buffer);
 bool W25_ReadJEDECID(uint8_t id[3]);
 
 /**
- * @brief フラッシュの write/read/verify セルフテスト。予約領域(先頭4KB, データ領域外)を
- *        スクラッチに使うので保存データは消さない。消去→パターン書込→読出→照合。
+ * @brief フラッシュの write/read/verify セルフテスト。末尾の4KB (SELFTEST_ADDR, データ領域外)を
+ *        スクラッチに使うので保存データと区切りの表は消さない。消去→パターン書込→読出→照合。
  * @return true:一致(書込/読出/消去OK), false:不一致/失敗
  */
 bool W25_SelfTest(void);

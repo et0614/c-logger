@@ -40,6 +40,8 @@ void executeSecondlyTask(void);
 // ロギング(計測)モードの開始/停止と状態取得 (USBコマンドから制御)
 void setLoggingActive(bool on);
 bool getLoggingActive(void);
+// 記録の開始。append=false: データを消して先頭から、true: データを残して続きから
+void startLogging(bool append);
 
 // ソフトウェア時計 (UNIX epoch秒) の設定/取得
 void     Clock_Set(uint32_t epoch);

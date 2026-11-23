@@ -191,22 +191,32 @@ class CLogger:
             raise RuntimeError(f"dump: incomplete data {len(raw)}/{nbytes} bytes")
         return hdr, [struct.unpack_from(REC_FORMAT, raw, i * size) for i in range(n)]
 
+    def get_segments(self, status=None):
+        """記録の区切り [(最初のレコードの番号, その時刻, 記録間隔), ...] を返す。
+        続きから記録 (resume_logging) するたびに1件増える。FW 3.4.x 以前は get_status の開始時刻と間隔の1件。"""
+        try:
+            segs = self.request("get_segments")["segments"]
+            if segs:
+                return [tuple(s) for s in segs]
+        except RuntimeError:
+            pass  # 古いファームウェア (unknown_command)
+        s = status or self.request("get_status")
+        return [(0, s.get("start_dt", 0), s["interval"])]
+
     def download(self, progress=None):
         """保存データを全件読み出す。
         @param progress progress(受信済み件数, 全件数) を随時呼ぶ
-        @return (start_dt, interval, records[(temp, hum, co2)]) 。0件なら records は空。"""
+        @return (segments, records[(temp, hum, co2)]) 。0件なら records は空。"""
         s = self.request("get_status")
+        segs = self.get_segments(s)
         total = s["count"]
-        if total == 0:
-            return s.get("start_dt", 0), s["interval"], []
         recs = []
-        hdr = None
         for start in range(0, total, DUMP_CHUNK):
             cnt = min(DUMP_CHUNK, total - start)
             cb = (lambda n, base=start: progress(base + n, total)) if progress else None
-            hdr, part = self.dump_range(start, cnt, cb)
+            _, part = self.dump_range(start, cnt, cb)
             recs += part
-        return hdr["start_dt"], hdr["interval"], recs
+        return segs, recs
 
     def get_correction(self):
         return Correction(self.request("get_correction"))
@@ -340,17 +350,32 @@ def update_firmware(hex_path, avrdude, output=print):
     return p.wait()
 
 
-def write_csv(path, start_dt, interval, recs, corr=None):
-    """CSV を書く。補正後の値 (temp_C, hum_pct, co2_ppm) と補正前の値 (*_raw) を並べる"""
+def record_times(segs, n):
+    """区切り segs から、レコード 0〜n-1 の時刻 (UNIX秒) を返す。
+    レコード i は、最初のレコードの番号が i 以下の最後の区切りの「時刻 + (i - 番号) × 間隔」"""
+    out = []
+    k = 0
+    for i in range(n):
+        while k + 1 < len(segs) and segs[k + 1][0] <= i:
+            k += 1
+        s = segs[k]
+        out.append(s[1] + (i - s[0]) * s[2])
+    return out
+
+
+def write_csv(path, segs, recs, corr=None):
+    """CSV を書く。補正後の値 (temp_C, hum_pct, co2_ppm) と補正前の値 (*_raw) を並べる。
+    segs は記録の区切り (CLogger.get_segments)"""
     corr = corr or Correction()
     f2 = lambda v: "" if v is None else f"{v:.2f}"  # noqa: E731
     f0 = lambda v: "" if v is None else str(v)      # noqa: E731
+    times = record_times(segs, len(recs))
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["index", "epoch", "datetime", "temp_C", "hum_pct", "co2_ppm",
                     "temp_raw_C", "hum_raw_pct", "co2_raw_ppm"])
         for i, (temp, hum, co2) in enumerate(recs):
-            ts = start_dt + i * interval
+            ts = times[i]
             t, h, c = decode_record(temp, hum, co2)
             w.writerow([i, ts, fmt_time(ts),
                         f2(corr.apply("temp", t)), f2(corr.apply("hum", h)), f0(corr.apply("co2", c)),
@@ -424,7 +449,11 @@ def cmd_info(dev, args):
     days = s["count"] * s["interval"] / 86400
     print(f"保存件数: {s['count']:,} / {s['capacity']:,}  (約{days:.1f}日分)")
     if s["count"] > 0:
-        print(f"記録開始: {fmt_time(s['start_dt'])}")
+        segs = dev.get_segments(s)
+        used = [g for g in segs if g[0] < s["count"]]
+        last = record_times(segs, s["count"])[-1]
+        print(f"記録期間: {fmt_time(segs[0][1])} 〜 {fmt_time(last)}"
+              + (f"  (途中で {len(used) - 1} 回再開)" if len(used) > 1 else ""))
     print(f"機器の時計: {fmt_time(s['epoch'])}")
     corr = dev.get_correction()
     if not corr.is_identity:
@@ -455,19 +484,29 @@ def cmd_start(dev, args):
     print("記録を開始しました。USBを抜いても記録を続けます。")
 
 
+def cmd_resume(dev, args):
+    """データを残したまま、続きから記録する (FW 3.5.0 以降)"""
+    now = int(time.time())
+    dev.request("set_time", {"epoch": now})
+    params = {"sec": args.interval} if args.interval else None
+    r = dev.request("resume_logging", params)
+    print(f"時刻設定: {fmt_time(now)}")
+    print(f"{r['start']:,} 件の続きから、{r['interval']} 秒間隔で記録を再開しました。USBを抜いても記録を続けます。")
+
+
 def cmd_read(dev, args):
     def progress(n, total):
         print(f"\r受信中... {n:,}/{total:,}", end="", flush=True)
-    start_dt, interval, recs = dev.download(progress)
+    segs, recs = dev.download(progress)
     if not recs:
         print("保存データがありません (0件)。")
         return
     print()
-    out = args.output or default_csv_name(dev.request("get_id").get("device_id", ""), start_dt)
-    write_csv(out, start_dt, interval, recs, dev.get_correction())
+    out = args.output or default_csv_name(dev.request("get_id").get("device_id", ""), segs[0][1])
+    write_csv(out, segs, recs, dev.get_correction())
+    times = record_times(segs, len(recs))
     print(f"CSV保存: {out}")
-    print(f"{len(recs):,} 件 (計測失敗 {count_failed(recs)} 件)  {fmt_time(start_dt)} 〜 "
-          f"{fmt_time(start_dt + (len(recs) - 1) * interval)}")
+    print(f"{len(recs):,} 件 (計測失敗 {count_failed(recs)} 件)  {fmt_time(times[0])} 〜 {fmt_time(times[-1])}")
 
 
 def cmd_measure(dev, args):
@@ -585,6 +624,8 @@ def main():
     sub.add_parser("info", help="機器情報・状態を表示")
     p = sub.add_parser("start", help="時刻を合わせて記録開始 (既存データは消去)")
     p.add_argument("-i", "--interval", type=int, help="記録間隔 [秒]")
+    p = sub.add_parser("resume", help="時刻を合わせ、データを残したまま続きから記録 (FW 3.5.0 以降)")
+    p.add_argument("-i", "--interval", type=int, help="記録間隔 [秒] (省略時は前回と同じ)")
     p = sub.add_parser("read", help="保存データを CSV に保存")
     p.add_argument("output", nargs="?", help="出力CSVファイル名 (省略時は自動命名)")
     p = sub.add_parser("measure", help="温湿度(CO2)を連続表示 (保存しない)")
@@ -626,7 +667,7 @@ def main():
         print(f"ポート {port} を開けません: {e}")
         return 1
 
-    handlers = {"info": cmd_info, "start": cmd_start, "read": cmd_read,
+    handlers = {"info": cmd_info, "start": cmd_start, "resume": cmd_resume, "read": cmd_read,
                 "measure": cmd_measure, "selftest": cmd_selftest, "clear": cmd_clear, "clock": cmd_clock,
                 "correction": cmd_correction, "frc": cmd_frc}
     try:

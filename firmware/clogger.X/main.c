@@ -354,8 +354,28 @@ static void usbHeartbeat(void)
 
 // RSTボタンのエッジ割り込み (PD6両エッジ)。押下/解放へ即時反応してLEDを点灯/消灯する。
 // (5秒長押しによるリセット判定は executeSecondlyTask のポーリングで行う)
+// 待機中 (記録していない) は、押したら短く2回点滅して消える。記録中 (押している間ずっと点灯) と
+// 見分けられるようにするため。電池だけで置いてある本体が記録しているかを、ボタンで確かめられる。
 void rstButtonHandler(void)
 {
+    if (s_standby)
+    {
+        if (RST_GetValue()) return;           // 離したとき: 何もしない (点滅の後は消えている)
+        for (uint8_t i = 0; i < 2; i++)
+        {
+            turnOnGreenLED();
+            DELAY_milliseconds(120);
+            turnOffGreenLED();
+            DELAY_milliseconds(150);
+        }
+        // 離すまで待ち (最大5秒)、チャタリングが収まるのを待つ。押している間の再点滅を防ぐ
+        for (uint16_t t = 0; t < 500 && !RST_GetValue(); t++) DELAY_milliseconds(10);
+        DELAY_milliseconds(30);
+        // この割り込みの後でポートの割り込みフラグがまとめて消されるので、点滅中に USB が挿されていたら
+        // ここで拾う (拾わないとリセットされず待機のままになる)
+        if (UDTC_GetValue()) s_usb_plugged = true;
+        return;
+    }
     if (!RST_GetValue()) turnOnGreenLED();  // 押し込み(Low) → 点灯
     else                 turnOffGreenLED(); // 解放(High)   → 消灯
 }
@@ -425,10 +445,16 @@ void executeSecondlyTask(void)
             {
                 if (!start_dt_set)
                 {
-                    // 1レコード目の時刻基準を「最初の保存(=区間終端)の今」で確定する。
-                    // 以降の各レコード時刻は start_dt + index*interval で復元される。
-                    EM_settings.start_dt = Clock_Get();
-                    EM_saveSettings();
+                    // この区切りの1件目の時刻を「最初の保存(=区間終端)の今」で確定し、区切りの表に書き足す。
+                    // 以降の各レコード時刻は start_dt + (index - start_index)*interval で復元される。
+                    // 先頭から記録するときは、旧版の PC ツール向けに EEPROM の start_dt も書く。
+                    uint32_t now = Clock_Get();
+                    if (rec_latest == 0)
+                    {
+                        EM_settings.start_dt = now;
+                        EM_saveSettings();
+                    }
+                    Measurement_AddSegment(rec_latest, now, N);
                     start_dt_set = true;
                 }
                 Measurement_AvgStore();
@@ -456,32 +482,41 @@ void executeSecondlyTask(void)
 // 再びUSB通信したい場合はリセット(RST 5秒長押し等)でUSB通信モードに戻る。
 void setLoggingActive(bool on)
 {
-    if (on)
+    if (on) startLogging(false);
+    else
     {
-        // 記録中はウォッチドッグを使わない (この後 USB を止めて STANDBY で眠るため)
-        watchdogSet(0);
-        // ロギング開始時にSTCC4初期化。
-        // (boot時ではなくここで行うことで、USB通信モードをI2C非依存にし確実に列挙させる)
-        Measurement_Initialize();
-        // 過去データは保持しない方針なので、毎回フラッシュ先頭(index 0)から記録する。
-        // 使用済み領域を消去し rec_latest を 0 に戻す。
-        Measurement_ClearData();
-        // 長期未通電からの復帰に備え、計測開始前に1度コンディショニング(約22秒)を実施する
-        // (STCC4 datasheet 推奨)。コマンド送信のみで即 return し、約22秒は executeSecondlyTask
-        // の conditioning_wait カウントダウン中(PITスリープ)で消化してから初回計測へ移る。
-        if (Measurement_StartConditioning())
-            conditioning_wait = MEASUREMENT_CONDITIONING_SEC;
-        else
-            conditioning_wait = 0; // 送信失敗時は従来どおり即計測へ(コンディショニング省略)
-        // CO2あり版は、記録間隔によらず最初の1時間は毎秒計測してセンサを暖機する
-        co2_warmup_left = Measurement_HasCO2() ? CO2_WARMUP_SEC : 0;
-        // start_dt(各レコードの時刻復元の基準)は、コンディショニング後の初回計測時に確定する。
-        // (executeSecondlyTask で start_dt_set を見て EEPROM 保存する)
-        start_dt_set = false;
+        Measurement_SetFlashSleep(false);
+        isLogging = false;
     }
-    // 記録中はフラッシュを書き込みの合間に Power-down にする (止めるときは起こす)
-    Measurement_SetFlashSleep(on);
-    isLogging = on;
+}
+
+// 記録を始める。append=false: 保存データを消して先頭から (start_logging)。
+// append=true: データを残して続きから (resume_logging)。どちらも最初の保存で区切りを1件書き足す。
+void startLogging(bool append)
+{
+    // 記録中はウォッチドッグを使わない (この後 USB を止めて STANDBY で眠るため)
+    watchdogSet(0);
+    // ロギング開始時にSTCC4初期化。rec_latest もフラッシュから数え直す (追記はその続きから書く)
+    // (boot時ではなくここで行うことで、USB通信モードをI2C非依存にし確実に列挙させる)
+    Measurement_Initialize();
+    // 先頭から記録するときは使用済み領域と区切りの表を消去し rec_latest を 0 に戻す。
+    if (!append) Measurement_ClearData();
+    // 長期未通電からの復帰に備え、計測開始前に1度コンディショニング(約22秒)を実施する
+    // (STCC4 datasheet 推奨)。コマンド送信のみで即 return し、約22秒は executeSecondlyTask
+    // の conditioning_wait カウントダウン中(PITスリープ)で消化してから初回計測へ移る。
+    if (Measurement_StartConditioning())
+        conditioning_wait = MEASUREMENT_CONDITIONING_SEC;
+    else
+        conditioning_wait = 0; // 送信失敗時は従来どおり即計測へ(コンディショニング省略)
+    // CO2あり版は、記録間隔によらず最初の1時間は毎秒計測してセンサを暖機する
+    co2_warmup_left = Measurement_HasCO2() ? CO2_WARMUP_SEC : 0;
+    // 区切りの時刻 (この区切りの1件目の時刻) は、コンディショニング後の初回の保存で確定する
+    // (executeSecondlyTask で start_dt_set を見て区切りの表に書き足す)
+    start_dt_set = false;
+
+    // 記録中はフラッシュを書き込みの合間に Power-down にする
+    Measurement_SetFlashSleep(true);
+    isLogging = true;
 }
 
 bool getLoggingActive(void)

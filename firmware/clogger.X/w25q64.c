@@ -83,7 +83,7 @@ static bool W25_WaitForReady(void) {
 }
 
 // データの書き込み (3バイトアドレス指定)
-static bool W25_WriteData(uint32_t address, uint8_t *data, uint16_t len) {
+bool W25_WriteData(uint32_t address, uint8_t *data, uint16_t len) {
     if (!isValidRange(address, len)) return false;
 
     W25_WriteEnable();
@@ -131,10 +131,10 @@ bool W25_ReadJEDECID(uint8_t id[3]) {
     return (id[0] != 0x00 && id[0] != 0xFF); // 0x00/0xFF は未接続/バス異常
 }
 
-// write/read/verify セルフテスト。予約領域(先頭4KB, DATA_START_ADDR=4096 より前)をスクラッチに
-// 使うので保存データ(index 0 以降)は消えない。消去→パターン書込→読出→照合。
+// write/read/verify セルフテスト。データ領域の外の末尾4KB (SELFTEST_ADDR) をスクラッチに
+// 使うので保存データと区切りの表は消えない。消去→パターン書込→読出→照合。
 bool W25_SelfTest(void) {
-    const uint32_t addr = 0; // 予約領域の先頭セクタ(現状未使用)
+    const uint32_t addr = SELFTEST_ADDR;
     uint8_t wr[16], rd[16];
     for (uint8_t i = 0; i < sizeof(wr); i++) wr[i] = (uint8_t)(0xA5 ^ i);
 

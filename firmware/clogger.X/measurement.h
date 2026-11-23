@@ -141,7 +141,36 @@ void Measurement_AvgSample(void);
 /// @return true:保存成功, false:Flash満杯 or 書込み失敗
 bool Measurement_AvgStore(void);
 
-/// 保存済みデータを消去する (メモリ初期化)。使用済みの領域を物理消去し、
+// ====== 記録の区切り (追記での記録再開) ======
+// 記録を再開するたびに「何番目のレコードから、何時に、何秒間隔で」を1件ずつフラッシュ先頭の
+// 4KB (SEGMENT_TABLE_ADDR) に書き足す。レコード i の時刻は、start_index <= i を満たす最後の区切りから
+//   時刻 = start_dt + (i - start_index) × interval
+// で求める (区切りの間の空白は、USB でつないでいた間や電池を替えていた間)。
+// 1件 16バイトで最大 SEGMENT_MAX 件。消すのはデータの消去 (Measurement_ClearData) のときだけ。
+// FW 3.4.x 以前で記録したデータには区切りが無い (EEPROM の start_dt / interval が1件目の区切りに当たる)。
+
+typedef struct {
+    uint32_t start_index;  // この区切りの最初のレコードの番号
+    uint32_t start_dt;     // そのレコードの時刻 (UNIX秒。記録間隔の終わりの時刻)
+    uint16_t interval;     // 記録間隔 [秒]
+} Segment_t;
+
+#define SEGMENT_MAX  (4096 / 16)
+
+/// 区切りの表を先頭から順に読む。*slot を 0 にして呼び始め、false が返るまで繰り返す。
+/// 壊れた項目 (旧版のセルフテストが書いた模様など) は飛ばす。
+bool Measurement_SegmentNext(uint16_t *slot, Segment_t *out);
+
+/// 有効な区切りの件数
+uint16_t Measurement_SegmentCount(void);
+
+/// 区切りを1件書き足す。@return false: 表が満杯 or 書き込み失敗
+bool Measurement_AddSegment(uint32_t start_index, uint32_t start_dt, uint16_t interval);
+
+/// 区切りを書き足せる残りの件数
+uint16_t Measurement_SegmentFree(void);
+
+/// 保存済みデータを消去する (メモリ初期化)。使用済みの領域と区切りの表を物理消去し、
 /// rec_latest を 0 に戻す。空き判定(humidity==0xFFFF)が正しく働くよう物理消去する。
 /// 末尾から先頭へ消す (途中で電源が落ちても、残るのは先頭から連続した有効なデータになる)。
 /// 注意: 消去はブロッキング (64KB ブロックあたり typ 150ms。満杯で typ 約40秒)。

@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C-Logger 記録を続ける</title>
+<style>
+  :root {
+    --bg: #f5f6f4; --card: #ffffff; --ink: #1d2422; --sub: #5d6a66; --line: #d9dfdc;
+    --accent: #0f7a5c; --accent-ink: #ffffff; --warn: #a8480f; --warn-bg: #fdf1e7; --ok-bg: #e8f5ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141917; --card: #1d2422; --ink: #e8eeeb; --sub: #9aa8a3; --line: #323c39;
+      --accent: #3fbf96; --accent-ink: #0c1512; --warn: #f0a26b; --warn-bg: #33241a; --ok-bg: #1b2f28;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 17px/1.7 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", Meiryo, sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 26px; margin: 0; }
+  h1 small { font-size: 17px; font-weight: 400; color: var(--sub); margin-left: 8px; }
+  .lead { color: var(--sub); margin: 6px 0 0; font-size: 15px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-top: 18px; }
+  ol { margin: 0; padding-left: 1.4em; }
+  ol li + li { margin-top: 4px; }
+  button {
+    font: inherit; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink); cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.big { width: 100%; padding: 16px; font-size: 20px; border-radius: 10px; }
+  button.small { padding: 4px 12px; font-size: 14px; }
+  button:disabled { opacity: .45; cursor: default; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 20px; margin: 0 0 18px; }
+  dt { color: var(--sub); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .note { color: var(--sub); font-size: 14px; margin: 12px 0 0; }
+  .msg { border-radius: 10px; padding: 14px 16px; margin-top: 18px; white-space: pre-line; }
+  .msg.warn { background: var(--warn-bg); color: var(--warn); }
+  .msg.ok { background: var(--ok-bg); }
+  .foot { margin-top: 28px; font-size: 14px; color: var(--sub); display: flex; gap: 20px; flex-wrap: wrap; }
+  .foot a { color: var(--sub); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>C-Logger<small data-i18n="title"></small></h1>
+    <button id="langBtn" class="small"></button>
+  </header>
+  <p class="lead" data-i18n="lead"></p>
+
+  <div id="unsupported" class="msg warn" hidden data-i18n="unsupported"></div>
+
+  <section id="steps">
+    <ol>
+      <li data-i18n="step1"></li>
+      <li data-i18n="step2"></li>
+      <li data-i18n="step3"></li>
+      <li data-i18n="step4"></li>
+    </ol>
+  </section>
+
+  <section id="connectBox">
+    <button id="connectBtn" class="primary big"></button>
+  </section>
+
+  <section id="devBox" hidden>
+    <dl>
+      <dt data-i18n="info_count"></dt><dd id="iCount"></dd>
+      <dt data-i18n="info_last"></dt><dd id="iLast"></dd>
+      <dt data-i18n="info_batt"></dt><dd id="iBatt"></dd>
+    </dl>
+    <button id="continueBtn" class="primary big"></button>
+    <p class="note" data-i18n="continue_note"></p>
+  </section>
+
+  <div id="message" class="msg" hidden></div>
+
+  <p class="foot">
+    <a href="../manual.html" data-i18n="manual"></a>
+    <a href="../app/" data-i18n="full_app"></a>
+  </p>
+</main>
+
+<script>
+"use strict";
+
+// 記録間隔 [秒]。このページでは変えられない (配布して1年間記録してもらう使い方を想定)。
+const INTERVAL_SEC = 60;
+// 電池の電圧の目安 [V]。下回ったら交換を勧める。無いときは USB 給電で 0V 近くになる
+const BATT_LOW_V = 2.7;
+const BATT_NONE_V = 1.0;
+
+const TEXT = {
+  ja: {
+    title: "記録を続ける",
+    lead: "記録が止まっていたとき（本体のボタンを押して LED が2回点滅したとき）や、電池を交換した後に、このページで記録を続けます。これまでのデータは消えません。",
+    unsupported: "このブラウザでは使えません。パソコンの Chrome または Edge で開いてください（スマートフォンでは使えません）。",
+    step1: "本体を USB ケーブルでパソコンにつなぎます。",
+    step2: "下の「接続」を押し、一覧から C-Logger を選んで「接続」を押します。",
+    step3: "「記録を続ける」を押します。",
+    step4: "USB ケーブルを抜き、本体を元の場所に戻します。",
+    connect: "接続", connecting: "接続しています…",
+    info_count: "保存データ", info_last: "最後の記録", info_batt: "電池",
+    count_fmt: "{n} 件", none: "まだありません",
+    batt_ok: "{v} V", batt_low: "{v} V（残りわずかです。新しい電池に交換してから続けてください）",
+    batt_none: "入っていません",
+    continue: "記録を続ける（1分ごと）", continuing: "記録を続けています…",
+    continue_note: "これまでのデータの続きに、1分ごとに書き足します。本体の時計もこのパソコンの時刻に合わせます。",
+    done: "記録を続けています。\nUSB ケーブルを抜いて、本体を元の場所に戻してください。\n\n確かめるときは本体のボタンを押してください。押している間ずっと LED が点灯すれば記録中です。",
+    no_batt: "電池が入っていません。電池を入れてから、もう一度「接続」からやり直してください（電池が無いと、ケーブルを抜いたときに記録が止まります）。",
+    old_fw: "この本体はファームウェアが古いため、このページでは記録を続けられません。配布元にお問い合わせください。",
+    full: "メモリがいっぱいのため、記録を続けられません。配布元にお問い合わせください。",
+    conn_failed: "接続できませんでした。{e}\nUSB ケーブルを挿し直してから、もう一度お試しください。",
+    failed: "記録を続けられませんでした。{e}\nUSB ケーブルを挿し直して、「接続」からやり直してください。",
+    unplugged: "USB ケーブルが抜かれました。もう一度つないで「接続」からやり直してください。",
+    lost: "接続が切れました", no_response: "本体から応答がありません", not_clogger: "C-Logger ではない機器です",
+    e_segments_full: "続きからの記録はこれ以上できません。配布元にお問い合わせください。",
+    e_memory_full: "メモリがいっぱいです。配布元にお問い合わせください。",
+    e_time_not_set: "本体の時計を合わせられませんでした。",
+    manual: "取扱説明書", full_app: "すべての操作（データの保存など）",
+  },
+  en: {
+    title: "Continue logging",
+    lead: "Use this page when logging has stopped (pressing the button makes the LED blink twice) or after replacing the battery. The stored data is kept.",
+    unsupported: "This browser is not supported. Please open this page in Chrome or Edge on a computer (phones are not supported).",
+    step1: "Connect the logger to this computer with a USB cable.",
+    step2: "Press Connect below, choose C-Logger from the list and press Connect.",
+    step3: "Press Continue logging.",
+    step4: "Unplug the cable and put the logger back in place.",
+    connect: "Connect", connecting: "Connecting…",
+    info_count: "Stored data", info_last: "Last record", info_batt: "Battery",
+    count_fmt: "{n} records", none: "none yet",
+    batt_ok: "{v} V", batt_low: "{v} V (almost empty; replace the battery before continuing)",
+    batt_none: "not inserted",
+    continue: "Continue logging (every minute)", continuing: "Continuing…",
+    continue_note: "New records are appended every minute after the stored data. The logger's clock is set to this computer's time.",
+    done: "Logging continues.\nUnplug the USB cable and put the logger back in place.\n\nTo check, press the logger's button: if the LED stays on while you hold it, the logger is recording.",
+    no_batt: "No battery is inserted. Insert a battery and start again from Connect (without a battery, logging stops when the cable is unplugged).",
+    old_fw: "This logger's firmware is too old for this page. Please contact the person who gave you the logger.",
+    full: "The memory is full, so logging cannot continue. Please contact the person who gave you the logger.",
+    conn_failed: "Could not connect. {e}\nRe-plug the USB cable and try again.",
+    failed: "Could not continue logging. {e}\nRe-plug the USB cable and start again from Connect.",
+    unplugged: "The USB cable was unplugged. Connect it again and start from Connect.",
+    lost: "Connection lost", no_response: "No response from the logger", not_clogger: "This device is not a C-Logger",
+    e_segments_full: "Logging cannot be continued any more times. Please contact the person who gave you the logger.",
+    e_memory_full: "The memory is full. Please contact the person who gave you the logger.",
+    e_time_not_set: "Could not set the logger's clock.",
+    manual: "Manual (Japanese)", full_app: "All functions (saving data, etc.)",
+  },
+};
+
+let lang = "ja";
+try {
+  lang = localStorage.getItem("clogger_lang") || (navigator.language.startsWith("ja") ? "ja" : "en");
+} catch (e) {
+  lang = navigator.language.startsWith("ja") ? "ja" : "en";
+}
+if (!TEXT[lang]) lang = "ja";
+
+function t(key, vars) {
+  let s = TEXT[lang][key];
+  if (s === undefined) s = key;
+  if (vars) for (const k in vars) s = s.split(`{${k}}`).join(String(vars[k]));
+  return s;
+}
+
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ------------------------------------------------------------
+// 通信 (USB-CDC / JSON 1行=1コマンド)。操作ページ (../app/) の CLogger から、このページで使う分だけ
+// ------------------------------------------------------------
+const USB_FILTER = { usbVendorId: 0x04D8, usbProductId: 0x0B15 };
+const DEVICE_NAME = "C-Logger";
+
+class CLogger {
+  constructor(port) { this.port = port; this.buf = new Uint8Array(0); this.wake = null; this.closed = false; this.id = 0; }
+
+  async open() {
+    await this.port.open({ baudRate: 115200 });
+    this.writer = this.port.writable.getWriter();
+    this.reader = this.port.readable.getReader();
+    this.pump = this._pump();
+    await sleep(200);
+    this.buf = new Uint8Array(0);
+  }
+
+  async _pump() {
+    try {
+      for (;;) {
+        const { value, done } = await this.reader.read();
+        if (done) break;
+        if (value && value.length) {
+          const merged = new Uint8Array(this.buf.length + value.length);
+          merged.set(this.buf); merged.set(value, this.buf.length);
+          this.buf = merged;
+          if (this.wake) this.wake();
+        }
+      }
+    } catch (e) { /* 抜かれた、または本体が USB から切り離れた */ }
+    this.closed = true;
+    if (this.wake) this.wake();
+  }
+
+  async close() {
+    this.closed = true;
+    try { await this.reader.cancel(); } catch (e) {}
+    try { await this.pump; } catch (e) {}
+    try { this.reader.releaseLock(); } catch (e) {}
+    try { this.writer.releaseLock(); } catch (e) {}
+    try { await this.port.close(); } catch (e) {}
+  }
+
+  _waitData(ms) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.wake = null; resolve(false); }, ms);
+      this.wake = () => { clearTimeout(timer); this.wake = null; resolve(true); };
+    });
+  }
+
+  async _readJsonLine(ms) {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const nl = this.buf.indexOf(0x0A);
+      if (nl >= 0) {
+        const line = new TextDecoder().decode(this.buf.slice(0, nl + 1)).trim();
+        this.buf = this.buf.slice(nl + 1);
+        if (line.startsWith("{")) {
+          try { return JSON.parse(line); } catch (e) { return null; }
+        }
+        continue;
+      }
+      const left = deadline - Date.now();
+      if (left <= 0 || this.closed) return null;
+      await this._waitData(left);
+    }
+  }
+
+  async request(command, params, waitMs = 3000) {
+    if (this.closed) throw new Error(t("lost"));
+    const rid = ++this.id;
+    const req = { id: rid, command };
+    if (params !== undefined) req.params = params;
+    await this.writer.write(new TextEncoder().encode(JSON.stringify(req) + "\n"));
+    for (;;) {
+      const j = await this._readJsonLine(waitMs);
+      if (j === null) throw new Error(this.closed ? t("lost") : t("no_response"));
+      if (j.id === rid) {
+        if (!j.ok && j.error) {
+          const err = new Error(TEXT[lang]["e_" + j.error] || `${command}: ${j.error}`);
+          err.code = j.error;
+          throw err;
+        }
+        return j;
+      }
+    }
+  }
+}
+
+function fwAtLeast(fw, major, minor, patch) {
+  const v = String(fw).split(".").map(Number), w = [major, minor, patch];
+  for (let i = 0; i < 3; i++) if ((v[i] || 0) !== w[i]) return (v[i] || 0) > w[i];
+  return true;
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+function fmtTime(epoch) {
+  const d = new Date(epoch * 1000);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// 区切り [[最初のレコードの番号, その時刻, 記録間隔], ...] から、レコード idx の時刻
+function recordTime(segs, idx) {
+  let s = segs[0];
+  for (const g of segs) { if (g[0] <= idx) s = g; else break; }
+  return s[1] + (idx - s[0]) * s[2];
+}
+
+// ------------------------------------------------------------
+// 画面
+// ------------------------------------------------------------
+let dev = null;
+let info = null;     // { status, segments, vbat, fwOk }
+let busy = false;
+let msgKey = null;   // 表示中のメッセージ (言語を切り替えたら描き直す)
+let msgVars = null;
+let msgKind = null;
+
+function showMessage(key, kind, vars) {
+  msgKey = key; msgKind = kind; msgVars = vars;
+  const m = $("message");
+  if (!key) { m.hidden = true; return; }
+  m.textContent = t(key, vars);
+  m.className = "msg " + (kind || "ok");
+  m.hidden = false;
+}
+
+function render() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  $("langBtn").textContent = lang === "ja" ? "English" : "日本語";
+  $("connectBtn").textContent = busy && !info ? t("connecting") : t("connect");
+  $("connectBtn").disabled = busy;
+  $("continueBtn").textContent = busy && info ? t("continuing") : t("continue");
+  if (msgKey) showMessage(msgKey, msgKind, msgVars);
+  $("devBox").hidden = !info;
+  if (!info) return;
+
+  const n = info.status.count;
+  $("iCount").textContent = t("count_fmt", { n: n.toLocaleString() });
+  $("iLast").textContent = n > 0 ? fmtTime(recordTime(info.segments, n - 1)) : t("none");
+  const v = info.vbat.toFixed(2);
+  $("iBatt").textContent = info.vbat < BATT_NONE_V ? t("batt_none")
+    : info.vbat < BATT_LOW_V ? t("batt_low", { v }) : t("batt_ok", { v });
+  $("continueBtn").disabled = busy || !info.canContinue;
+}
+
+async function disconnect() {
+  const d = dev;
+  dev = null; info = null;
+  if (d) await d.close();
+}
+
+async function connect() {
+  showMessage(null);
+  let port = null;
+  const known = (await navigator.serial.getPorts()).filter((p) => {
+    const i = p.getInfo();
+    return i.usbVendorId === USB_FILTER.usbVendorId && i.usbProductId === USB_FILTER.usbProductId;
+  });
+  if (known.length === 1) port = known[0];
+  if (!port) {
+    try { port = await navigator.serial.requestPort({ filters: [USB_FILTER] }); } catch (e) { return; }
+  }
+  if (dev) await disconnect();
+  busy = true; render();
+  try {
+    dev = new CLogger(port);
+    await dev.open();
+    const hello = await dev.request("hello");
+    if (hello.device !== DEVICE_NAME) throw new Error(t("not_clogger"));
+    const status = await dev.request("get_status");
+    const vbat = (await dev.request("get_battery")).vbat_mV / 1000;
+    const fwOk = fwAtLeast(hello.fw, 3, 5, 0);
+    const segments = fwOk ? (await dev.request("get_segments")).segments : [[0, status.start_dt, status.interval]];
+    const full = status.count >= status.capacity;
+    info = { status, segments, vbat, canContinue: fwOk && !full && vbat >= BATT_NONE_V };
+    if (!fwOk) showMessage("old_fw", "warn");
+    else if (full) showMessage("full", "warn");
+    else if (vbat < BATT_NONE_V) showMessage("no_batt", "warn");
+  } catch (e) {
+    await disconnect();
+    showMessage("conn_failed", "warn", { e: e.message });
+  }
+  busy = false; render();
+}
+
+async function continueLogging() {
+  busy = true; showMessage(null); render();
+  try {
+    await dev.request("set_time", { epoch: Math.floor(Date.now() / 1000) });
+    await dev.request("resume_logging", { sec: INTERVAL_SEC });
+    await disconnect();
+    showMessage("done", "ok");
+  } catch (e) {
+    await disconnect();
+    showMessage("failed", "warn", { e: e.message });
+  }
+  busy = false; render();
+}
+
+render();
+$("langBtn").addEventListener("click", () => {
+  lang = lang === "ja" ? "en" : "ja";
+  try { localStorage.setItem("clogger_lang", lang); } catch (e) {}
+  render();
+});
+
+if (!("serial" in navigator)) {
+  $("unsupported").hidden = false;
+  $("connectBox").hidden = true;
+} else {
+  $("connectBtn").addEventListener("click", () => { if (!busy) connect(); });
+  $("continueBtn").addEventListener("click", () => { if (dev && info && !busy) continueLogging(); });
+  navigator.serial.addEventListener("disconnect", async (ev) => {
+    if (dev && ev.target === dev.port && !busy) {
+      await disconnect();
+      showMessage("unplugged", "warn");
+      render();
+    }
+  });
+}
+</script>
+</body>
+</html>

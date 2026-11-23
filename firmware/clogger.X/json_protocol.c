@@ -188,6 +188,92 @@ static void ph_start_logging(int32_t id, const char *json,
     USB_Comm_Disable();
 }
 
+// 時計が合わせてあるとみなす下限 (2023-11-15)。リセット直後の時計は 0 から進むので、これより前なら未設定
+#define CLOCK_VALID_MIN  1700000000UL
+
+// 記録の再開 (追記): 保存データを消さずに続きから記録する。params.sec (省略時は前回の間隔) で記録する。
+// 先に set_time で時計を合わせること (区切りの時刻に使う)。応答後は start_logging と同じく USB を止める。
+// エラー: time_not_set (時計が未設定) / memory_full (メモリが満杯) / segments_full (区切りの表が満杯。
+// データを保存して start_logging で始め直す) / invalid_sec
+static void ph_resume_logging(int32_t id, const char *json,
+                              const jsmntok_t *t, int ntok, int params)
+{
+    uint16_t sec = EM_settings.interval;
+    int st = (params >= 0) ? obj_get(json, t, ntok, params, "sec") : -1;
+    if (st >= 0)
+    {
+        int32_t v = tok_int(json, &t[st]);
+        if (v <= 0 || v > 65535) { reply_error(id, "invalid_sec"); return; }
+        sec = (uint16_t)v;
+    }
+    if (Clock_Get() < CLOCK_VALID_MIN) { reply_error(id, "time_not_set"); return; }
+
+    uint32_t count = W25_Count_Record();
+    if (count >= MAX_RECORD_COUNT) { reply_error(id, "memory_full"); return; }
+
+    // FW 3.4.x 以前で記録したデータには区切りが無い。EEPROM の開始時刻と間隔を1件目の区切りとして先に残す
+    // (この後で間隔を書き換えるため)。もう1件分の空きも要る。
+    bool need_first = (count > 0 && Measurement_SegmentCount() == 0);
+    if (Measurement_SegmentFree() < (need_first ? 2 : 1))
+    {
+        reply_error(id, "segments_full");
+        return;
+    }
+    if (need_first && !Measurement_AddSegment(0, EM_settings.start_dt, EM_settings.interval))
+    {
+        reply_error(id, "write_failed");
+        return;
+    }
+
+    EM_settings.interval = sec;
+    EM_saveSettings();
+    startLogging(true);
+
+    char b[JP_REPLY_CAP];
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"start\":%lu,\"interval\":%u}\n",
+             (long)id, (unsigned long)count, (unsigned)sec);
+    send_line(b);
+    USB_Comm_Flush();   // start_logging と同じ: 応答を送り切ってから USB を止める
+    USB_Comm_Disable();
+}
+
+// 記録の区切りの一覧: {"id":N,"ok":true,"segments":[[start_index,start_dt,interval],...]}
+// 区切りが無い (FW 3.4.x 以前で記録したデータ) ときは、EEPROM の開始時刻と間隔を1件目として返す。
+// 最大 256 件あるので、1行を少しずつ送る。
+static void ph_get_segments(int32_t id, const char *json,
+                            const jsmntok_t *t, int ntok, int params)
+{
+    (void)json; (void)t; (void)ntok; (void)params;
+    char b[48];
+    snprintf(b, sizeof(b), "{\"id\":%ld,\"ok\":true,\"segments\":[", (long)id);
+    send_line(b);
+
+    uint16_t slot = 0, n = 0;
+    Segment_t seg;
+    while (Measurement_SegmentNext(&slot, &seg))
+    {
+        if (n == 0 && seg.start_index != 0)
+        {
+            // 1件目が 0 番から始まっていない (念のため): EEPROM の値で 0 番からの区切りを補う
+            snprintf(b, sizeof(b), "[0,%lu,%u],",
+                     (unsigned long)EM_settings.start_dt, (unsigned)EM_settings.interval);
+            send_line(b);
+        }
+        snprintf(b, sizeof(b), "%s[%lu,%lu,%u]", (n > 0) ? "," : "",
+                 (unsigned long)seg.start_index, (unsigned long)seg.start_dt, (unsigned)seg.interval);
+        send_line(b);
+        n++;
+    }
+    if (n == 0)
+    {
+        snprintf(b, sizeof(b), "[0,%lu,%u]",
+                 (unsigned long)EM_settings.start_dt, (unsigned)EM_settings.interval);
+        send_line(b);
+    }
+    send_line("]}\n");
+    USB_Comm_Flush();
+}
+
 // ロギング(計測)停止。USB通信モードに留まる。
 static void ph_stop_logging(int32_t id, const char *json,
                             const jsmntok_t *t, int ntok, int params)
@@ -309,14 +395,15 @@ static void ph_get_status(int32_t id, const char *json,
     char b[192];
     snprintf(b, sizeof(b),
         "{\"id\":%ld,\"ok\":true,\"logging\":%s,\"interval\":%u,"
-        "\"count\":%lu,\"capacity\":%lu,\"epoch\":%lu,\"start_dt\":%lu}\n",
+        "\"count\":%lu,\"capacity\":%lu,\"epoch\":%lu,\"start_dt\":%lu,\"segments\":%u}\n",
         (long)id,
         getLoggingActive() ? "true" : "false",
         (unsigned)EM_settings.interval,
         (unsigned long)W25_Count_Record(),
         (unsigned long)MAX_RECORD_COUNT,
         (unsigned long)Clock_Get(),
-        (unsigned long)EM_settings.start_dt);
+        (unsigned long)EM_settings.start_dt,
+        (unsigned)Measurement_SegmentCount());
     send_line(b);
 }
 
@@ -663,6 +750,8 @@ static const jp_command_t s_commands[] = {
     { "get_battery",   ph_get_battery   },
     { "echo",          ph_echo          },
     { "start_logging", ph_start_logging },
+    { "resume_logging", ph_resume_logging },
+    { "get_segments",  ph_get_segments  },
     { "stop_logging",  ph_stop_logging  },
     { "set_time",      ph_set_time      },
     { "set_interval",  ph_set_interval  },

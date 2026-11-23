@@ -126,7 +126,10 @@
         <span data-i18n="sec"></span>
         <span id="capacity" class="note" style="margin:0"></span>
       </div>
-      <div class="row"><button id="startBtn" class="primary" data-i18n="log_start"></button></div>
+      <div class="row">
+        <button id="startBtn" class="primary" data-i18n="log_start"></button>
+        <button id="resumeBtn" data-i18n="log_resume"></button>
+      </div>
       <p class="note" data-i18n="log_note"></p>
       <p class="note" data-i18n="batt_note"></p>
     </section>
@@ -236,8 +239,14 @@ const TEXT = {
     count_fmt: "{n} 件", count_interval: "（記録間隔 {s} 秒）",
     tab_log: "記録", tab_data: "データ", tab_live: "ライブ表示", tab_calib: "校正", tab_clock: "時計", tab_diag: "診断",
     sec: "秒", min: "分", temp: "温度", hum: "湿度",
-    log_interval: "記録間隔", log_start: "記録を開始",
-    log_note: "本体の時計をこのパソコンの時刻に合わせ、保存済みのデータを消去してから記録を始めます。開始すると本体は USB から切り離されます。ケーブルを抜いて設置してください。",
+    log_interval: "記録間隔", log_start: "記録を開始", log_resume: "続きから記録",
+    log_note: "「記録を開始」は、保存済みのデータを消去してから記録を始めます。「続きから記録」は、データを消さずに続きへ書き足します（つないでいた間は記録されません）。どちらも本体の時計をこのパソコンの時刻に合わせます。開始すると本体は USB から切り離されます。ケーブルを抜いて設置してください。",
+    resume_confirm: "保存済みのデータを残したまま、記録間隔 {s} 秒で続きから記録しますか？",
+    resumed: "続きから記録を始めました。USB ケーブルを抜いて設置してください。",
+    period_resumed: "（途中で {k} 回再開）",
+    e_time_not_set: "本体の時計を合わせられませんでした。もう一度お試しください。",
+    e_memory_full: "メモリがいっぱいです。データを保存してから「記録を開始」で始め直してください。",
+    e_segments_full: "続きからの記録はこれ以上できません。データを保存してから「記録を開始」で始め直してください。",
     batt_life: "新品の電池で {d}（参考値）", mem_life: "メモリは {d}分", limit_mem: "先にメモリがいっぱいになります。",
     batt_note: "電池の持ちは参考値です。電池の種類や温度で変わります。USB につないだまま記録する場合は電池を使いません。",
     dur_days: "約{v}日", dur_hours: "約{v}時間", dur_min: "約{v}分",
@@ -302,8 +311,14 @@ const TEXT = {
     count_fmt: "{n} records", count_interval: " (interval {s} s)",
     tab_log: "Logging", tab_data: "Data", tab_live: "Live view", tab_calib: "Calibration", tab_clock: "Clock", tab_diag: "Diagnostics",
     sec: "s", min: "min", temp: "Temperature", hum: "Humidity",
-    log_interval: "Logging interval", log_start: "Start logging",
-    log_note: "The logger's clock is set to this computer's time and the stored data is erased before logging starts. Once started, the logger disconnects from USB. Unplug the cable and place the logger.",
+    log_interval: "Logging interval", log_start: "Start logging", log_resume: "Continue logging",
+    log_note: "Start logging erases the stored data first. Continue logging keeps the data and appends to it (nothing is recorded while the logger is connected). Both set the logger's clock to this computer's time. Once started, the logger disconnects from USB. Unplug the cable and place the logger.",
+    resume_confirm: "Keep the stored data and continue logging every {s} seconds?",
+    resumed: "Logging continues. Unplug the USB cable and place the logger. ",
+    period_resumed: " (resumed {k} times)",
+    e_time_not_set: "Could not set the logger's clock. Please try again.",
+    e_memory_full: "The memory is full. Save the data, then start again with Start logging.",
+    e_segments_full: "Logging cannot be continued any more times. Save the data, then start again with Start logging.",
     batt_life: "{d} on a new battery (estimate)", mem_life: "memory holds {d}", limit_mem: "The memory fills up first.",
     batt_note: "Battery life is an estimate. It varies with the battery and temperature. Logging with USB connected does not use the battery.",
     dur_days: "about {v} days", dur_hours: "about {v} hours", dur_min: "about {v} min",
@@ -586,6 +601,28 @@ function fmtDuration(sec) {
 
 const signed = (v, digits) => (v >= 0 ? "+" : "") + v.toFixed(digits);
 
+// 記録の区切り [[最初のレコードの番号, その時刻, 記録間隔], ...] から、レコードの時刻を求める関数を作る。
+// 記録を「続きから」再開するたびに区切りが1件増える (FW 3.5.0〜。それより前は1件だけ)。
+// 番号を小さい順に渡すと速い (区切りを順にたどる)。
+function makeTimeline(segs) {
+  let k = 0;
+  return (idx) => {
+    if (k > 0 && segs[k][0] > idx) k = 0;
+    while (k + 1 < segs.length && segs[k + 1][0] <= idx) k++;
+    const s = segs[k];
+    return s[1] + (idx - s[0]) * s[2];
+  };
+}
+
+// 区切りを読む。古いファームウェアは get_segments を持たないので、get_status の開始時刻と間隔を1件とする
+async function readSegments(status) {
+  if (fwAtLeast(info.hello.fw, 3, 5, 0)) {
+    const segs = (await dev.request("get_segments")).segments;
+    if (segs.length > 0) return segs;
+  }
+  return [[0, status.start_dt, status.interval]];
+}
+
 // ------------------------------------------------------------
 // 画面の状態
 // ------------------------------------------------------------
@@ -618,6 +655,7 @@ function updateEnabled() {
   const n = info.status.count;
   $("saveBtn").disabled = n === 0;
   $("eraseBtn").disabled = n === 0;
+  $("resumeBtn").disabled = !fwAtLeast(info.hello.fw, 3, 5, 0);   // 続きからの記録は FW 3.5.0〜
   $("clockApplyBtn").disabled = clockNew === null;
 }
 
@@ -654,8 +692,11 @@ function renderInfo() {
   }
   const n = status.count;
   $("iCount").textContent = t("count_fmt", { n: n.toLocaleString() }) + (n > 0 ? t("count_interval", { s: status.interval }) : "");
+  // 区切りのうち、記録が1件以上あるもの (再開した直後に読み出すと、まだ記録の無い区切りがある)
+  const used = info.segments.filter((s) => s[0] < n).length;
+  const tl = makeTimeline(info.segments);
   $("iPeriod").textContent = n > 0
-    ? `${fmtTime(status.start_dt)} 〜 ${fmtTime(status.start_dt + (n - 1) * status.interval)}`
+    ? `${fmtTime(tl(0))} 〜 ${fmtTime(tl(n - 1))}` + (used > 1 ? t("period_resumed", { k: used - 1 }) : "")
     : "—";
   $("iBatt").textContent = `${(batt.vbat_mV / 1000).toFixed(2)} V`;
   $("clockCur").textContent = info.clockPpm === null ? "—" : t("clock_ppm", { p: signed(info.clockPpm, 0) });
@@ -741,10 +782,12 @@ async function readInfo() {
   let now = null;
   try { now = await dev.request("measure"); } catch (e) { /* センサの異常は表示で知らせる */ }
   info = { hello, id, status, batt, corr, clockPpm, now, hasCo2: now ? now.co2_ppm !== null : null };
+  info.segments = await readSegments(status);
 }
 
 async function refreshStatus() {
   info.status = await dev.request("get_status");
+  info.segments = await readSegments(info.status);
   renderInfo();
 }
 
@@ -825,6 +868,27 @@ async function startLogging() {
   }
 }
 
+// 続きから記録する: データを残したまま、時計を合わせて記録を再開する (FW 3.5.0〜)
+async function resumeLogging() {
+  const sec = Number($("interval").value);
+  if (!Number.isInteger(sec) || sec < 1 || sec > 3600) { showMessage(t("interval_bad"), "warn"); return; }
+  if (!confirm(t("resume_confirm", { s: sec }))) return;
+
+  const co2 = info.hasCo2;
+  setBusy(true);
+  showMessage(t("starting"), "ok");
+  try {
+    await dev.request("set_time", { epoch: Math.floor(Date.now() / 1000) });
+    await dev.request("resume_logging", { sec });
+    await disconnect();
+    showMessage(t("resumed") + (co2 ? t("started_co2") : "") + t("started_read"), "ok");
+  } catch (e) {
+    showMessage(t("start_failed", { e: errText(e) }), "warn");
+    await dropIfLost();
+    setBusy(false);
+  }
+}
+
 async function saveCsv() {
   setBusy(true);
   showMessage("");
@@ -838,7 +902,8 @@ async function saveCsv() {
     const f2 = (v) => (v === null ? "" : v.toFixed(2));
     const f0 = (v) => (v === null ? "" : String(v));
     const parts = ["index,epoch,datetime,temp_C,hum_pct,co2_ppm,temp_raw_C,hum_raw_pct,co2_raw_ppm\r\n"];
-    let startDt = status.start_dt, interval = status.interval, failed = 0;
+    const tl = makeTimeline(await readSegments(status));
+    let failed = 0;
 
     for (let start = 0; start < total; start += DUMP_CHUNK) {
       const cnt = Math.min(DUMP_CHUNK, total - start);
@@ -847,7 +912,6 @@ async function saveCsv() {
         prog.value = done;
         $("saveState").textContent = t("reading", { a: done.toLocaleString(), b: total.toLocaleString() });
       });
-      startDt = hdr.start_dt; interval = hdr.interval;
       const view = new DataView(raw.buffer);
       const lines = [];
       for (let i = 0; i < hdr.count; i++) {
@@ -861,7 +925,7 @@ async function saveCsv() {
           hv = view.getUint16(o + 2, true) / 100;
           cv = co2raw === CO2_NONE ? null : co2raw;
         }
-        const idx = start + i, ts = startDt + idx * interval;
+        const idx = start + i, ts = tl(idx);
         lines.push([idx, ts, fmtTime(ts),
           f2(info.corr.apply("temp", tv)), f2(info.corr.apply("hum", hv)), f0(info.corr.apply("co2", cv)),
           f2(tv), f2(hv), f0(cv)].join(","));
@@ -869,7 +933,7 @@ async function saveCsv() {
       parts.push(lines.join("\r\n") + "\r\n");
     }
 
-    const name = `clogger_${info.id}_${fmtTime(startDt, true)}.csv`;
+    const name = `clogger_${info.id}_${fmtTime(tl(0), true)}.csv`;
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(parts, { type: "text/csv" }));
     a.download = name;
@@ -1141,6 +1205,7 @@ if (!("serial" in navigator)) {
   document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => { if (!busy) selectTab(b.dataset.tab); }));
   const on = (id, fn) => $(id).addEventListener("click", () => { if (dev && !busy) fn(); });
   on("startBtn", startLogging);
+  on("resumeBtn", resumeLogging);
   on("saveBtn", saveCsv);
   on("eraseBtn", eraseData);
   on("corrSaveBtn", () => saveCorrection(false));

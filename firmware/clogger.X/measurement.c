@@ -297,8 +297,107 @@ void Measurement_ClearData(void)
             }
         }
     }
+    // 区切りの表はデータの後に消す (途中で電源が落ちて表だけ残っても、次の記録開始で書き足す区切りが後に来るので、
+    // そちらが使われる)
+    W25_SectorErase(SEGMENT_TABLE_ADDR);
     rec_latest = 0;
 }
+
+// <editor-fold defaultstate="collapsed" desc="記録の区切り">
+
+// 区切り1件のフラッシュ上の形 (16バイト。ページの境界をまたがない)
+#define SEG_SLOT_SIZE  16
+#define SEG_MAGIC      0x5E67u
+
+typedef struct __attribute__((packed)) {
+    uint32_t start_index;
+    uint32_t start_dt;
+    uint16_t interval;
+    uint16_t magic;      // SEG_MAGIC
+    uint8_t  reserved[3];
+    uint8_t  crc;        // 先頭15バイトの CRC-8
+} SegmentSlot;
+
+typedef enum { SLOT_EMPTY, SLOT_VALID, SLOT_BROKEN } SlotState;
+
+static SlotState readSlot(uint16_t slot, SegmentSlot *s)
+{
+    if (s_flash_sleep) W25_ReleasePowerDown();
+    W25_ReadData(SEGMENT_TABLE_ADDR + (uint32_t)slot * SEG_SLOT_SIZE, (uint8_t *)s, sizeof(*s));
+    if (s_flash_sleep) W25_PowerDown();
+
+    const uint8_t *p = (const uint8_t *)s;
+    bool empty = true;
+    for (uint8_t i = 0; i < sizeof(*s); i++) if (p[i] != 0xFF) { empty = false; break; }
+    if (empty) return SLOT_EMPTY;
+    if (s->magic != SEG_MAGIC || s->crc != CRC_calc8((uint8_t *)s, sizeof(*s) - 1)) return SLOT_BROKEN;
+    return SLOT_VALID;
+}
+
+bool Measurement_SegmentNext(uint16_t *slot, Segment_t *out)
+{
+    // 書き足しは常に空きの先頭へ行うので、最初の空きで表は終わる
+    while (*slot < SEGMENT_MAX)
+    {
+        SegmentSlot s;
+        SlotState st = readSlot((*slot)++, &s);
+        if (st == SLOT_EMPTY) { *slot = SEGMENT_MAX; return false; }
+        if (st == SLOT_VALID)
+        {
+            out->start_index = s.start_index;
+            out->start_dt = s.start_dt;
+            out->interval = s.interval;
+            return true;
+        }
+    }
+    return false;
+}
+
+uint16_t Measurement_SegmentCount(void)
+{
+    uint16_t slot = 0, n = 0;
+    Segment_t seg;
+    while (Measurement_SegmentNext(&slot, &seg)) n++;
+    return n;
+}
+
+// 最初の空きの番号 (満杯なら SEGMENT_MAX)
+static uint16_t firstEmptySlot(void)
+{
+    for (uint16_t i = 0; i < SEGMENT_MAX; i++)
+    {
+        SegmentSlot s;
+        if (readSlot(i, &s) == SLOT_EMPTY) return i;
+    }
+    return SEGMENT_MAX;
+}
+
+uint16_t Measurement_SegmentFree(void)
+{
+    return SEGMENT_MAX - firstEmptySlot();
+}
+
+bool Measurement_AddSegment(uint32_t start_index, uint32_t start_dt, uint16_t interval)
+{
+    uint16_t slot = firstEmptySlot();
+    if (slot >= SEGMENT_MAX) return false;
+
+    SegmentSlot s = {
+        .start_index = start_index,
+        .start_dt = start_dt,
+        .interval = interval,
+        .magic = SEG_MAGIC,
+        .reserved = { 0, 0, 0 },
+    };
+    s.crc = CRC_calc8((uint8_t *)&s, sizeof(s) - 1);
+
+    if (s_flash_sleep) W25_ReleasePowerDown();
+    bool ok = W25_WriteData(SEGMENT_TABLE_ADDR + (uint32_t)slot * SEG_SLOT_SIZE, (uint8_t *)&s, sizeof(s));
+    if (s_flash_sleep) W25_PowerDown();
+    return ok;
+}
+
+// </editor-fold>
 
 bool Measurement_ReadStore(void)
 {

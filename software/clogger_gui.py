@@ -165,8 +165,13 @@ class App(tk.Tk):
                                                                            sticky="w", pady=(2, 10))
         self.start_btn = ttk.Button(f, text="Start logging…", command=self._on_start_logging)
         self.start_btn.grid(row=2, column=0, sticky="w")
+        self.resume_btn = ttk.Button(f, text="Continue logging…", command=self._on_resume_logging)
+        self.resume_btn.grid(row=2, column=1, columnspan=2, sticky="w", padx=6)
+        self.device_buttons.append(self.resume_btn)
         ttk.Label(f, wraplength=540, justify="left", text=(
-            "Starting erases all stored data and synchronizes the device clock to this PC.\n"
+            "Start erases all stored data. Continue keeps the data and appends to it "
+            "(firmware 3.5.0 or later; nothing is recorded while connected). "
+            "Both synchronize the device clock to this PC.\n"
             "After starting, the C-Logger disconnects from USB and keeps logging on its coin cell (CR2032). "
             "To stop logging, unplug and plug it into USB again (data is kept) "
             "or hold the button for 5 seconds.")).grid(row=3, column=0, columnspan=3, sticky="w", pady=10)
@@ -515,7 +520,8 @@ class App(tk.Tk):
             return {"hello": d.request("hello"), "id": d.request("get_id").get("device_id"),
                     "status": d.request("get_status"), "battery": d.request("get_battery"),
                     "measure": d.request("measure"),  # センサ構成(CO2あり/なし)の判定に使う
-                    "clock": d.request("get_clock_calib"), "corr": d.get_correction()}
+                    "clock": d.request("get_clock_calib"), "corr": d.get_correction(),
+                    "segments": d.get_segments()}
         return self.device.call(f)
 
     def _has_co2(self):
@@ -538,8 +544,11 @@ class App(tk.Tk):
         cap_days = s["capacity"] * s["interval"] / 86400
         self.info_vars["records"].set(f"{s['count']:,} / {s['capacity']:,}  ({cap_days:,.0f} days at {s['interval']} s)")
         if s["count"] > 0:
-            end = s["start_dt"] + (s["count"] - 1) * s["interval"]
-            self.info_vars["period"].set(f"{fmt_time(s['start_dt'])} – {fmt_time(end)}")
+            segs = info["segments"]
+            times = cl.record_times(segs, s["count"])
+            used = sum(1 for g in segs if g[0] < s["count"])
+            self.info_vars["period"].set(f"{fmt_time(times[0])} – {fmt_time(times[-1])}"
+                                         + (f"  (resumed {used - 1} times)" if used > 1 else ""))
         else:
             self.info_vars["period"].set("(no data)")
         self.info_vars["sensor"].set("CO2, temperature, humidity" if self._has_co2() else "Temperature, humidity")
@@ -597,6 +606,35 @@ class App(tk.Tk):
 
         self._run("Erasing memory and starting logging (may take a few minutes)…", work, done, "indeterminate")
 
+    def _on_resume_logging(self):
+        try:
+            sec = int(self.interval_var.get())
+        except (tk.TclError, ValueError):
+            sec = 0
+        if not 1 <= sec <= INTERVAL_MAX_S:
+            messagebox.showwarning(APP_TITLE, f"Recording interval must be 1–{INTERVAL_MAX_S} seconds.")
+            return
+        if not messagebox.askyesno(APP_TITLE, f"Keep the stored data and continue logging every {sec} s?\n\n"
+                                   "The device clock is set to this PC's time."):
+            return
+        self._stop_live()
+
+        def work():
+            def f(d):
+                now = int(time.time())
+                d.request("set_time", {"epoch": now})
+                d.request("resume_logging", {"sec": sec})
+                return now
+            return self.device.call(f)
+
+        def done(now):
+            self._disconnect(f"Logging continued at {fmt_time(now)}.")
+            messagebox.showinfo(APP_TITLE, (
+                f"Logging continued at {fmt_time(now)} (every {sec} s).\n\n"
+                "The C-Logger has disconnected from USB. You can unplug it now."))
+
+        self._run("Continuing logging…", work, done, "indeterminate")
+
     # ------------------------------------------------------------------
     # データ
     # ------------------------------------------------------------------
@@ -607,7 +645,8 @@ class App(tk.Tk):
             return
         path = filedialog.asksaveasfilename(
             title="Save CSV", defaultextension=".csv", filetypes=[("CSV", "*.csv")],
-            initialfile=cl.default_csv_name(self.info.get("id", ""), s.get("start_dt", 0)))
+            initialfile=cl.default_csv_name(self.info.get("id", ""),
+                                            self.info.get("segments", [(0, s.get("start_dt", 0), 1)])[0][1]))
         if not path:
             return
         self._stop_live()
@@ -616,8 +655,8 @@ class App(tk.Tk):
             def f(d):
                 corr = d.get_correction()
                 return corr, d.download(lambda n, total: self.q.put(("progress", None, (n, total))))
-            corr, (start_dt, interval, recs) = self.device.call(f)
-            cl.write_csv(path, start_dt, interval, recs, corr)
+            corr, (segs, recs) = self.device.call(f)
+            cl.write_csv(path, segs, recs, corr)
             return len(recs), cl.count_failed(recs)
 
         def done(r):
