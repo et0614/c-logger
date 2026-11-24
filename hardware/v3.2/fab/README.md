@@ -6,7 +6,7 @@
 |---|---|
 | `JLCPCB_BOM_v3.2.xlsx` | 入稿用 BOM（列: Comment / Designator / Footprint / JLCPCB Part #） |
 | `JLCPCB_CPL_v3.2.xlsx` | 入稿用の部品配置データ（列: Designator / Mid X / Mid Y / Layer / Rotation）。Fusion の部品配置出力（`PnP_C-Logger_v3.2_front.txt` / `back.txt`）から、UPDI のテストパッドを除いて作った。BOM と参照記号が全数一致 |
-| `clogger_v3.2_gerber.zip` | ガーバー一式（Fusion Electronics 出力、2層、26 × 26 mm、ドリル `.XLN` とガーバージョブを含む） |
+| `clogger_v3.2_gerber.zip` | ガーバー一式（Fusion Electronics 出力、2層、26 × 26 mm、ドリル `.XLN` とガーバージョブを含む）。裏面のペースト層（`.GBP`）は空 |
 
 - 設計データ: `hardware/v3.2/pcb/clogger_v3.2.f3z`、回路図: `hardware/v3.2/pcb/clogger_v3.2_schematic.pdf`、外観: `hardware/v3.2/pcb/clogger_v3.2_top.png` / `_bottom.png`
 - BOM は 3.1 の CO2なし版の BOM から作り、基板データ（f3z の中の .brd）の部品39個と参照記号・パッケージが全数一致することを確かめた。UPDI のテストパッド（UDPI_PAD）は実装部品ではないので除く
@@ -27,6 +27,8 @@
 ## 発注時の指定
 
 3.1 と同じ（`hardware/v3.1/fab/README.md` の「発注時の指定」）: 表面処理 ENIG、板厚 1.2 mm、J1 の長穴は PTH、U1 は Global Sourcing、BT1 は裏面のスルーホール部品。JLC のプレビューで **U8 の向きと1番ピンの位置**も確かめる（部品面から見て左上が1番）。
+
+- 電池のマイナス接点（BT1 の Ø14 パッド）と UPDI のパッドは、フットプリントでステンシル（クリーム）をオフにしている（はんだマスクの開口は残す）。オンのままだと、両面実装で裏面のステンシルが作られ、電池の接点にはんだが印刷される（電池ホルダの推奨に反する）
 
 ## 確認待ち
 
