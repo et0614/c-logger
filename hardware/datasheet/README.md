@@ -9,7 +9,8 @@
 | `U3.pdf` | フラッシュメモリ 128Mbit | W25Q128JVSIQ (Winbond) | C97521 |
 | `U4.pdf` | USB ESD保護 | USBLC6-2SC6 互換 (TECH PUBLIC) | C2827654 |
 | `U5.pdf` | USB用 LDO 3.3V | XC6206P332MR-G (Torex) | C5446 |
-| `U6.pdf` | 昇圧 DC/DC 3.3V | TPS61021A (TI) | C193037 |
+| `U6.pdf` | 昇圧 DC/DC 3.3V（3.1・3.2） | TPS61021A (TI) | C193037 |
+| `U6_v3.3.pdf` | 昇降圧 DC/DC 3.3V（3.3） | TPS63900 (TI) | C1518762 |
 | `U7.pdf` | CO2センサ (CO2あり版のみ) | STCC4 (Sensirion) | C49191471 |
 | `U8.pdf` | 3軸加速度計 (基板3.2) | SC7A20HTR (Silan) | C19274408 |
 | `Q1.pdf` | 電池切り離し Pch MOSFET | AO3415A (AOS) | C133233 |
@@ -21,4 +22,5 @@
 | `J1.pdf` | USB Type-C レセプタクル | TYPE-C 16PIN 2MD(073) (SHOU HAN) | C2765186 |
 | `BT1.pdf` | CR2032 電池ホルダ | MY-2032-06 (MYOUNG) | C964823 |
 
+- 3.3 の L1 は 2.2uH の WPN252012H2R2MTY01 (Sunlord, C279858)。同じシリーズなので `L1.pdf` は 0.47uH 品のまま。
 - L1 は JLC 実装では WPN252012HR47MT (Sunlord, C279796) を使う。LCSC で入手できないため、手はんだの試作では同寸・同値の WIP252010S-R47ML を使った。
